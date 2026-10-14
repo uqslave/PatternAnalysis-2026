@@ -3,6 +3,7 @@ import numpy as np
 import nibabel as nib
 import glob
 import torch
+from torch.utils.data import DataLoader
 from torchvision import transforms
 from tqdm import tqdm
 
@@ -175,13 +176,29 @@ def load_data_2D(imageNames, target_shape=(256, 128), normImage=False,
         return images
 
 # ======================================================================================================================
+LABELS = ("Background", "Body Outline", "Bone", "Bladder", "Rectum", "Prostate")
+IMAGE_SIZE = (256, 144)
+TRAIN_BATCH_SIZE = 106
+TEST_BATCH_SIZE = 40
+VALIDATE_BATCH_SIZE = 56
+
+def get_train_loader() -> DataLoader:
+    train_dataset = HipMRIDataset("train", IMAGE_SIZE)
+    return DataLoader(train_dataset, batch_size = TRAIN_BATCH_SIZE, shuffle=True)
+
+def get_test_loader() -> DataLoader:
+    test_dataset = HipMRIDataset("test", IMAGE_SIZE)
+    return DataLoader(test_dataset, batch_size = TEST_BATCH_SIZE, shuffle=True)
+
+def get_validate_loader() -> DataLoader:
+    validate_dataset = HipMRIDataset("validate", IMAGE_SIZE)
+    return DataLoader(validate_dataset, batch_size = VALIDATE_BATCH_SIZE, shuffle=True)
+
 
 if __name__ == "__main__":
     # Try loading in data
-    from torch.utils.data import DataLoader
 
-    image_size = (256, 144)
-    train_dataset = HipMRIDataset("train", image_size)
+    train_dataset = HipMRIDataset("train", IMAGE_SIZE)
     train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
 
     print(len(train_dataloader))

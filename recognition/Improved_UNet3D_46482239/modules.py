@@ -55,11 +55,12 @@ class UNet(nn.Module):
 
         return out
 
+import torch.nn.functional as F
 class DiceLoss(nn.Module):
     """
     Dice Loss (DSC) class.
     """
-    def __init__(self, smooth: float= 1.e-6):
+    def __init__(self, smooth: float= 1.):
         """
         :param smooth: Prevent division by zero
         """
@@ -100,7 +101,7 @@ class DiceLoss(nn.Module):
 
 
 @torch.no_grad()
-def dsc_per_class(predictions, targets, smooth=1e-6):
+def dsc_per_class(predictions, targets, smooth=1):
     """
     Returns a tensor of shape [K] with the Dice score for each class, averaged over the batch.
     """
