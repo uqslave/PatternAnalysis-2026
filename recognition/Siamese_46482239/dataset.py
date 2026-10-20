@@ -180,19 +180,22 @@ class DataAudit:
         self._patient_split = ISICMelanomaDataset.patient_split(self._isic_melanoma_dataset)
 
         self._target_count = self._count_targets()
-        self._image_dims = self._check_images()
+        self._image_dims, self._downsampled_count = self._check_images()
         self._duplicate_patients = self._check_dupe_patients()
 
     def __repr__(self) -> str:
         return self._before_split() + self._after_split()
 
-    def _check_images(self) -> dict[str, int]:
+    def _check_images(self) -> tuple[dict[str, int], int]:
         image_dimensions = dict()
+        downsampled_count = 0
         for row in self._isic_melanoma_dataset:
             isic_image_id = row[0]
+            if "downsampled" in isic_image_id:
+                downsampled_count = downsampled_count + 1
             image = Image.open(DATASET_PATH + r"combined_images/" + isic_image_id + ".jpg")
             image_dimensions[image.size] = image_dimensions.get(image.size, 0) + 1
-        return image_dimensions
+        return image_dimensions, downsampled_count
 
 
     def _count_targets(self) -> tuple[int]:
@@ -233,9 +236,10 @@ class DataAudit:
         target_summary = (f"Benign count: {self._target_count[0]} ({target_ratios[0]}%)\n"
                           f"Malignant count: {self._target_count[1]} ({target_ratios[1]}%)\n")
         image_dimension_summary = f"Image dimensions count: {str(self._image_dims)}\n"
+        image_downsample_summary = f"Downsampled image count: {self._downsampled_count}\n"
         duplicate_patient_summary = f"Duplicate patients: {str(duplicate_sum)}\n"
 
-        return prologue + target_summary + image_dimension_summary + duplicate_patient_summary
+        return prologue + target_summary + image_dimension_summary + image_downsample_summary + duplicate_patient_summary
 
     def _after_split(self) -> str:
         prologue = 20 * "=" + " Data audit after patient split " + 20 * "=" + "\n"
