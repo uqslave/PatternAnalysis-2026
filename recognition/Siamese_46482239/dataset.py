@@ -19,6 +19,37 @@ def download_isic() -> None:
     print("Path to dataset files:", path)
 
 
+train_batch_size = 32
+validate_batch_size = 32
+test_batch_size = 32
+image_dims = (224, 224)
+
+def get_train_dataloader() -> DataLoader:
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        # transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
+    ])
+    train_dataset = ISICMelanomaDataset("train", image_dims, transform)
+    return DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, num_workers=0)
+
+def get_validate_dataloader() -> DataLoader:
+    validate_dataset = ISICMelanomaDataset("validate", image_dims)
+    return DataLoader(validate_dataset, batch_size=validate_batch_size, shuffle=False, num_workers=0)
+
+def get_test_dataloader() -> DataLoader:
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465),  # mean R, G, B empirical standard
+                             (0.2023, 0.1994, 0.2010)),   # std R, G, B empirical standard
+    ])
+    test_dataset = ISICMelanomaDataset("test", image_dims, transform)
+    return DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=0)
+
+
 class ISICMelanomaDataset(Dataset):
     @staticmethod
     def load_isic_csv() -> list[list[str]]:
@@ -136,11 +167,12 @@ class ISICMelanomaDataset(Dataset):
         label = self._labels[idx]
 
         image_path = image_folder_path / image
-        image = Image.open(image_path).convert('L')
+        image = Image.open(image_path)
         if self._transform:
             image = self._transform(image)
 
         return image, label
+
 
 class DataAudit:
     def __init__(self):
@@ -151,7 +183,8 @@ class DataAudit:
         self._image_dims = self._check_images()
         self._duplicate_patients = self._check_dupe_patients()
 
-    def __repr__(self) -> str:
+
+    def _before_split(self) -> str:
         prologue = 20 * "=" + " Data audit before patient split " + 20 * "=" + "\n"
 
         target_sum = sum(self._target_count)
@@ -164,16 +197,26 @@ class DataAudit:
             duplicate_sum[v] = duplicate_sum.get(v, 0) + 1
         duplicate_sum = dict(sorted(duplicate_sum.items()))
         duplicate_sum = sum(duplicate_sum.values())
-        patient_count = len(self._patient_split.keys())
 
-
-        target_summary = (f"Benign count: {self._target_count[0]} ({target_ratios[0]}%)\n" 
+        target_summary = (f"Benign count: {self._target_count[0]} ({target_ratios[0]}%)\n"
                           f"Malignant count: {self._target_count[1]} ({target_ratios[1]}%)\n")
         image_dimension_summary = f"Image dimensions count: {str(self._image_dims)}\n"
         duplicate_patient_summary = f"Duplicate patients: {str(duplicate_sum)}\n"
-        patient_count_summary = f"Patient Count: {patient_count}\n"
 
-        return prologue + target_summary + image_dimension_summary + duplicate_patient_summary + patient_count_summary
+        return prologue + target_summary + image_dimension_summary + duplicate_patient_summary
+
+    def _after_split(self) -> str:
+        prologue = 20 * "=" + " Data audit after patient split " + 20 * "=" + "\n"
+
+        patient_count = len(self._patient_split.keys())
+        patient_count_summary = f"Unique patients: {patient_count}\n"
+
+        return prologue + patient_count_summary
+
+
+
+    def __repr__(self) -> str:
+        return self._before_split() + self._after_split()
 
 
     def _check_images(self) -> dict[str, int]:
@@ -207,41 +250,7 @@ class DataAudit:
         return duplicate_patients
 
 
-train_batch_size = 32
-validate_batch_size = 32
-test_batch_size = 32
-image_dims = (224, 224)
-
-def get_train_dataloader():
-    transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        # transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
-    ])
-    train_dataset = ISICMelanomaDataset("train", image_dims, transform)
-    return DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, num_workers=0)
-
-def get_validate_dataloader():
-    validate_dataset = ISICMelanomaDataset("validate", image_dims)
-    return DataLoader(validate_dataset, batch_size=validate_batch_size, shuffle=False, num_workers=0)
-
-def get_test_dataloader():
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),  # mean R, G, B empirical standard
-                             (0.2023, 0.1994, 0.2010)),   # std R, G, B empirical standard
-    ])
-    test_dataset = ISICMelanomaDataset("test", image_dims, transform)
-    return DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=0)
-
-
 if __name__ == "__main__":
-    #isic_data_audit = DataAudit()
-    #print(isic_data_audit)
-    train = ISICMelanomaDataset("train", (0, 0))
-    test = ISICMelanomaDataset("test", (0, 0))
-    validate = ISICMelanomaDataset("validate", (0, 0))
+    isic_data_audit = DataAudit()
+    print(isic_data_audit)
 
