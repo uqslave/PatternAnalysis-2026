@@ -183,6 +183,38 @@ class DataAudit:
         self._image_dims = self._check_images()
         self._duplicate_patients = self._check_dupe_patients()
 
+    def __repr__(self) -> str:
+        return self._before_split() + self._after_split()
+
+    def _check_images(self) -> dict[str, int]:
+        image_dimensions = dict()
+        for row in self._isic_melanoma_dataset:
+            isic_image_id = row[0]
+            image = Image.open(DATASET_PATH + r"combined_images/" + isic_image_id + ".jpg")
+            image_dimensions[image.size] = image_dimensions.get(image.size, 0) + 1
+        return image_dimensions
+
+
+    def _count_targets(self) -> tuple[int]:
+        target_count = [0, 0]
+        for row in self._isic_melanoma_dataset:
+            _, _, target = row
+            target = int(float(target))
+            target_count[target] = target_count[target] + 1
+        return tuple(target_count)
+
+
+    def _check_dupe_patients(self) -> dict[str, int]:
+        patient_id_records = dict()
+        for row in self._isic_melanoma_dataset:
+            _, patient_id, _ = row
+            patient_id_split = patient_id.split(",")
+            patient_id = patient_id_split
+            for p_id in patient_id:
+                patient_id_records[p_id] = patient_id_records.get(p_id, 0) + 1
+
+        duplicate_patients = {k: v for k, v in patient_id_records.items() if v > 1}
+        return duplicate_patients
 
     def _before_split(self) -> str:
         prologue = 20 * "=" + " Data audit before patient split " + 20 * "=" + "\n"
@@ -212,43 +244,6 @@ class DataAudit:
         patient_count_summary = f"Unique patients: {patient_count}\n"
 
         return prologue + patient_count_summary
-
-
-
-    def __repr__(self) -> str:
-        return self._before_split() + self._after_split()
-
-
-    def _check_images(self) -> dict[str, int]:
-        image_dims = dict()
-        for row in self._isic_melanoma_dataset:
-            isic_image_id = row[0]
-            image = Image.open(DATASET_PATH + r"combined_images/" + isic_image_id + ".jpg")
-            image_dims[image.size] = image_dims.get(image.size, 0) + 1
-        return image_dims
-
-
-    def _count_targets(self) -> tuple[int]:
-        target_count = [0, 0]
-        for row in self._isic_melanoma_dataset:
-            _, _, target = row
-            target = int(float(target))
-            target_count[target] = target_count[target] + 1
-        return tuple(target_count)
-
-
-    def _check_dupe_patients(self) -> dict[str, int]:
-        patient_id_records = dict()
-        for row in self._isic_melanoma_dataset:
-            _, patient_id, _ = row
-            patient_id_split = patient_id.split(",")
-            patient_id = patient_id_split
-            for p_id in patient_id:
-                patient_id_records[p_id] = patient_id_records.get(p_id, 0) + 1
-
-        duplicate_patients = {k: v for k, v in patient_id_records.items() if v > 1}
-        return duplicate_patients
-
 
 if __name__ == "__main__":
     isic_data_audit = DataAudit()
