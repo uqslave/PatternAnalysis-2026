@@ -23,6 +23,7 @@ train_batch_size = 32
 validate_batch_size = 32
 test_batch_size = 32
 image_dims = (224, 224)
+RGB_MEAN, RGB_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 
 def get_train_dataloader() -> DataLoader:
     transform = transforms.Compose([
@@ -30,21 +31,25 @@ def get_train_dataloader() -> DataLoader:
         # transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        transforms.Normalize(RGB_MEAN, RGB_STD),
         transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
     ])
     train_dataset = ISICMelanomaDataset("train", image_dims, transform)
     return DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, num_workers=0)
 
 def get_validate_dataloader() -> DataLoader:
-    validate_dataset = ISICMelanomaDataset("validate", image_dims)
+    transform = transforms.Compose([
+        transforms.Resize(image_dims), transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(), transforms.Normalize(RGB_MEAN, RGB_STD),
+        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)])
+    validate_dataset = ISICMelanomaDataset("validate", image_dims, transform)
     return DataLoader(validate_dataset, batch_size=validate_batch_size, shuffle=False, num_workers=0)
 
 def get_test_dataloader() -> DataLoader:
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),  # mean R, G, B empirical standard
-                             (0.2023, 0.1994, 0.2010)),   # std R, G, B empirical standard
+        transforms.Normalize(RGB_MEAN,  # mean R, G, B empirical standard
+                             RGB_STD),  # std R, G, B empirical standard
     ])
     test_dataset = ISICMelanomaDataset("test", image_dims, transform)
     return DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=0)
@@ -167,7 +172,7 @@ class ISICMelanomaDataset(Dataset):
         label = self._labels[idx]
 
         image_path = image_folder_path / image
-        image = Image.open(image_path)
+        image = Image.open(image_path).convert("RGB")   # 'convert' forces RGB 3 channels
         if self._transform:
             image = self._transform(image)
 
