@@ -4,15 +4,16 @@ from torch import nn
 
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_dim, dim, kernel_size, stride=1, act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d, dropout_p=0.3):
+    def __init__(self, in_dim, dim, kernel_size, stride=1, dropout_p: float = 0.2):
         super().__init__()
         self.features = nn.Conv2d(in_dim, dim, kernel_size=kernel_size, stride=stride, bias=True)
-        self.norm1 = norm_layer(dim)
-        self.act_layer = act_layer()
+        self.norm1 = nn.GroupNorm(dim, dim)
+        self.act_layer = nn.ReLU()
         self.dropout = nn.Dropout2d(p=dropout_p)
 
     def forward(self, x):
-        out = self.norm1(self.features(x))
+        out = self.features(x)
+        out = self.norm1(out)
         out = self.act_layer(out)
         out = self.dropout(out)
         return out

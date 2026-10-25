@@ -27,9 +27,9 @@ BENIGN, MALIGNANT = 0.0, 1.0
 IMAGE_DIMS = (224, 224)
 RGB_MEAN, RGB_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 BATCH_SIZES = {
-    "train": 250,
-    "validate": 150,
-    "test": 195,
+    "train": 160,
+    "validate": 120,
+    "test": 145,
 }
 SHUFFLE = {
     "train": False,
@@ -57,9 +57,9 @@ TRANSFORMS = {
     ]),
 }
 TTV_SPLITS = {
-    "train": 0.78,
+    "train":    0.76,
     "validate": 0.10,
-    "test": 0.12,
+    "test":     0.14,
 }
 assert sum(TTV_SPLITS.values()) == 1.0, "Train/Test/Validate proportion must sum to 1.0"
 
