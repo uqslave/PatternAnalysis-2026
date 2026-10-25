@@ -1,9 +1,14 @@
+import random
+
 import kagglehub
 import csv
 from pathlib import Path
+
+import torchvision.transforms.functional as F
 from PIL import Image
 
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
@@ -18,41 +23,49 @@ def download_isic() -> None:
     path = kagglehub.dataset_download(handle = DATASET_HANDLE, output_dir = DATASET_PATH)
     print("Path to dataset files:", path)
 
-
-train_batch_size = 32
-validate_batch_size = 32
-test_batch_size = 32
-image_dims = (224, 224)
+BENIGN, MALIGNANT = 0.0, 1.0
+IMAGE_DIMS = (224, 224)
 RGB_MEAN, RGB_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
-
-def get_train_dataloader() -> DataLoader:
-    transform = transforms.Compose([
+BATCH_SIZES = {
+    "train": 250,
+    "validate": 150,
+    "test": 195,
+}
+SHUFFLE = {
+    "train": False,
+    "validate": False,
+    "test": False,
+}
+TRANSFORMS = {
+    "train": transforms.Compose([
         transforms.Resize((224, 224)),
         # transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(RGB_MEAN, RGB_STD),
         transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
-    ])
-    train_dataset = ISICMelanomaDataset("train", image_dims, transform)
-    return DataLoader(train_dataset, batch_size=train_batch_size, shuffle=True, num_workers=0)
-
-def get_validate_dataloader() -> DataLoader:
-    transform = transforms.Compose([
-        transforms.Resize(image_dims), transforms.RandomHorizontalFlip(),
+    ]),
+    "validate": transforms.Compose([
+        transforms.Resize(IMAGE_DIMS), transforms.RandomHorizontalFlip(),
         transforms.ToTensor(), transforms.Normalize(RGB_MEAN, RGB_STD),
-        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)])
-    validate_dataset = ISICMelanomaDataset("validate", image_dims, transform)
-    return DataLoader(validate_dataset, batch_size=validate_batch_size, shuffle=False, num_workers=0)
-
-def get_test_dataloader() -> DataLoader:
-    transform = transforms.Compose([
+        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
+    ]),
+    "test": transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(RGB_MEAN,  # mean R, G, B empirical standard
                              RGB_STD),  # std R, G, B empirical standard
-    ])
-    test_dataset = ISICMelanomaDataset("test", image_dims, transform)
-    return DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False, num_workers=0)
+    ]),
+}
+TTV_SPLITS = {
+    "train": 0.78,
+    "validate": 0.10,
+    "test": 0.12,
+}
+assert sum(TTV_SPLITS.values()) == 1.0, "Train/Test/Validate proportion must sum to 1.0"
+
+def get_isic_pairloader(dataset_id: str):
+    dataset = PairData(dataset_id)
+    return DataLoader(dataset, batch_size = BATCH_SIZES[dataset_id], shuffle = SHUFFLE[dataset_id], num_workers=0)
 
 
 class ISICMelanomaDataset(Dataset):
@@ -109,21 +122,14 @@ class ISICMelanomaDataset(Dataset):
                 if patient_id in read_patient_id:
                     id_to_use = patient_id
                     break
-
             if id_to_use not in patient_data.keys():
                 patient_data[id_to_use] = dict()
-            patient_data[id_to_use].update({isic_id: float(target)})
+            patient_data[id_to_use].update({isic_id: int(float(target))})
 
         return patient_data
 
     ISIC_DATA = load_isic_csv()
     PATIENT_SPLIT_DATA = patient_split(ISIC_DATA)
-    TTV_SPLITS = {
-        "train": 0.78,
-        "validate": 0.10,
-        "test": 0.12,
-    }
-    assert sum(TTV_SPLITS.values()) == 1.0, "Train/Test/Validate proportion must sum to 1.0"
 
     def __init__(self, dataset_id: str, img_dim: tuple[int, int], transform: transforms.Compose = None) -> None:
         super().__init__()
@@ -138,45 +144,90 @@ class ISICMelanomaDataset(Dataset):
         length = len(self.PATIENT_SPLIT_DATA.keys())
         if dataset_id == "train":
             start_idx = 0
-            end_idx = int(length * self.TTV_SPLITS[dataset_id] // 1)
+            end_idx = int(length * TTV_SPLITS[dataset_id] // 1)
         elif dataset_id == "validate":
-            start_idx = int(length * self.TTV_SPLITS["train"] // 1) + 1
-            end_idx = length * int(self.TTV_SPLITS["train"] + self.TTV_SPLITS[dataset_id]) // 1
+            start_idx = int(length * TTV_SPLITS["train"] // 1) + 1
+            end_idx = length * int(TTV_SPLITS["train"] + TTV_SPLITS[dataset_id]) // 1
         elif dataset_id == "test":
-            start_idx = int(length * (length - self.TTV_SPLITS[dataset_id]) // 1) + 1
+            start_idx = int(length * (length - TTV_SPLITS[dataset_id]) // 1) + 1
             end_idx = length
         else:
             raise KeyError(f"Unknown dataset: {dataset_id}")
-        self._dataset = list(self.PATIENT_SPLIT_DATA.items())[start_idx:end_idx]
+        dataset_whole = list(self.PATIENT_SPLIT_DATA.items())
+        random.shuffle(dataset_whole)
+        self._dataset = dataset_whole[start_idx:end_idx]
         images = list()
         labels = list()
         for patient_data in self._dataset:
-            _, pairs = patient_data
-            for pair in pairs.items():
+            _, scans = patient_data
+            for pair in scans.items():
                 images.append(pair[0] + ".jpg")
-                labels.append(pair[1])
-        self._images = images
+                labels.append(int(float(pair[1])))
+        self._image_file_names = images
         self._labels = labels
-        assert len(self._images) == len(self._labels)
+        assert len(self._image_file_names) == len(self._labels)
 
         # umm = {k: v for k, v in self._patient_split_data.items() if len(v.values()) > 1}
         # print(len(umm.keys()))
 
-
     def __len__(self) -> int:
-        return len(self._images)
+        return len(self._image_file_names)
 
-    def __getitem__(self, idx: int) -> tuple[Image.Image, int]:
+    def __getitem__(self, index: int) -> tuple[Tensor, Tensor]:
         image_folder_path = Path(DATASET_PATH + r"combined_images/")
-        image = self._images[idx]
-        label = self._labels[idx]
+        image_file = self._image_file_names[index]
+        label = self._labels[index]
+        label = torch.tensor(label)
 
-        image_path = image_folder_path / image
+        image_path = image_folder_path / image_file
         image = Image.open(image_path).convert("RGB")   # 'convert' forces RGB 3 channels
         if self._transform:
             image = self._transform(image)
+        else:
+            image = F.to_tensor(image)
 
         return image, label
+
+
+class PairData(Dataset):
+    """
+    Randomly choose one for the first image the try forcing 50:50 chance for second image.
+    """
+    FORCED = 0.50   # Chance of getting malignant scan as second image.
+
+    def __init__(self, dataset_id: str) -> None:
+        super().__init__()
+        self._dataset_id = dataset_id
+        self._dataset = self._load_isic_dataset(dataset_id)
+        self._benigns, self._malignants = self._extract_scans()
+
+    def __len__(self) -> int:
+        return len(self._dataset)
+
+    def __getitem__(self, index: int) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
+        choice1 = self._dataset[index]  # Dataset is shuffled when loaded.
+        if random.random() < self.FORCED:   # Randomly sample from malignant scans
+            choice2 = random.choice(tuple(self._malignants))
+        else:                               # Randomly sample from self._dataloader again
+            random_index = (index + random.randint(1, len(self._dataset) - 1)) % len(self._dataset)
+            choice2 = self._dataset[random_index]
+        return choice1, choice2
+
+    def _load_isic_dataset(self, dataset_id: str) -> ISICMelanomaDataset:
+        transform = TRANSFORMS[dataset_id]
+        return ISICMelanomaDataset(dataset_id, IMAGE_DIMS, transform)
+
+    def _extract_scans(self) -> tuple[tuple[tuple[Tensor, Tensor]], tuple[tuple[Tensor, Tensor]]]:
+        benign_scans = list()
+        malignant_scans = list()
+        for image, label in self._dataset:
+            if label == MALIGNANT:
+                malignant_scans.append((image, label),)
+            elif label == BENIGN:
+                benign_scans.append((image, label),)
+            else:
+                raise KeyError(f"Unknown label: {label}; Data labels not processed correctly")
+        return tuple(benign_scans), tuple(malignant_scans)
 
 
 class DataAudit:
