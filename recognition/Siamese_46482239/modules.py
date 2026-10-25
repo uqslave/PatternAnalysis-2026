@@ -84,7 +84,7 @@ class ContrastiveLoss(nn.Module):
         super().__init__()
         self.margin = margin
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor, pair) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, y: torch.Tensor, pair: torch.Tensor) -> torch.Tensor:
         D = F.pairwise_distance(x, y, eps=1e-8)
         pair = pair.float()
         loss = (1 - pair) * D.pow(2) + pair * torch.clamp(self.margin - D, min=0).pow(2)
