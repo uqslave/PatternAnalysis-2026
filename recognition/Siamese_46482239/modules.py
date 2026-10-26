@@ -7,7 +7,7 @@ class BasicBlock(nn.Module):
     def __init__(self, in_dim, dim, kernel_size, stride=1, dropout_p: float = 0.2):
         super().__init__()
         self.features = nn.Conv2d(in_dim, dim, kernel_size=kernel_size, stride=stride, bias=True)
-        self.norm1 = nn.GroupNorm(dim, dim)
+        self.norm1 = nn.GroupNorm(min(8, dim), dim)
         self.act_layer = nn.ReLU()
         self.dropout = nn.Dropout2d(p=dropout_p)
 
@@ -24,10 +24,13 @@ class CNN(nn.Module):
         self.dim = dim
         self.in_channels = in_channels
         self.num_class = num_class
-        self.pooling_depth = 2 * self.dim
+        self.depth = pow(2, 4 - 1)
+        self.pooling_depth = self.depth * self.dim
 
-        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=2, dropout_p=dropout_p)
-        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=2, dropout_p=dropout_p)
+        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=1, dropout_p=dropout_p)
+        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=1, dropout_p=dropout_p)
+        self.block3 = BasicBlock(self.dim * 2, self.dim * 4, 3, stride=2, dropout_p=dropout_p)
+        self.block4 = BasicBlock(self.dim * 4, self.dim * 8, 3, stride=2, dropout_p=dropout_p)
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Linear(self.pooling_depth, self.num_class)
@@ -35,6 +38,8 @@ class CNN(nn.Module):
     def forward(self, x):
         x = self.block1(x)
         x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
         out = self.avg_pool(x)
         out = out.view(out.size(0), -1)  # flatten
         return self.classifier(out)
@@ -46,10 +51,13 @@ class CNNEmbed(nn.Module):
         self.in_channels = in_channels
         self.embed_dims = embed_dims
         self.normalise = normalise
-        self.pooling_depth = 2 * self.dim
+        self.depth = pow(2, 4 - 1)
+        self.pooling_depth = self.depth * self.dim
 
-        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=2, dropout_p=dropout_p)
-        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=2, dropout_p=dropout_p)
+        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=1, dropout_p=dropout_p)
+        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=1, dropout_p=dropout_p)
+        self.block3 = BasicBlock(self.dim * 2, self.dim * 4, 3, stride=2, dropout_p=dropout_p)
+        self.block4 = BasicBlock(self.dim * 4, self.dim * 8, 3, stride=2, dropout_p=dropout_p)
 
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.embed = nn.Linear(self.pooling_depth, self.embed_dims)
@@ -57,6 +65,8 @@ class CNNEmbed(nn.Module):
     def forward(self, x) -> torch.Tensor:
         x = self.block1(x)
         x = self.block2(x)
+        x = self.block3(x)
+        x = self.block4(x)
         out = self.avg_pool(x)
         out = out.view(out.size(0), -1)  # flatten
         out = self.embed(out)
