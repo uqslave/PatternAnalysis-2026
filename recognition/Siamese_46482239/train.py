@@ -13,12 +13,12 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Using device:", device)
 
 
-dim = 32
+dim = 16
 in_channels = 3 # RGB
 embed_dims = 256
-dropout = 0.17
+dropout = 0.21
 normalise = True
-learning_rate = 0.001
+learning_rate = 0.0002
 
 # Test ---------------------------------------------------------
 #train_pair = PairData("train")
@@ -44,14 +44,14 @@ for epoch in range(EPOCHS):
 
     model.train()
     for batch_idx, (scans1, scans2) in enumerate(train_pair_loader):
-        print("\tBatch: ", batch_idx, end = "\t")
+        # print("\tBatch: ", batch_idx, end = "\t")
 
         images1, labels1 = scans1
         images2, labels2 = scans2
 
         images1, labels1 = images1.to(device), labels1.to(device)
         images2, labels2 = images2.to(device), labels2.to(device)
-        pairs = labels1 & labels2
+        pairs = (labels1 != labels2).float()
 
         embedding1, embedding2 = model(images1, images2)
 
@@ -73,7 +73,7 @@ for epoch in range(EPOCHS):
             images2, labels2 = scans2
             images1, labels1 = images1.to(device), labels1.to(device)
             images2, labels2 = images2.to(device), labels2.to(device)
-            pairs = labels1 & labels2
+            pairs = (labels1 != labels2).float()
             embedding1, embedding2 = model(images1, images2)
             loss = criterion(embedding1, embedding2, pairs)
             batch_loss.append(loss.item())
