@@ -32,8 +32,8 @@ BATCH_SIZES = {
     "test": 145,
 }
 SHUFFLE = {
-    "train": False,
-    "validate": False,
+    "train": True,
+    "validate": True,
     "test": False,
 }
 TRANSFORMS = {
@@ -147,9 +147,9 @@ class ISICMelanomaDataset(Dataset):
             end_idx = int(length * TTV_SPLITS[dataset_id] // 1)
         elif dataset_id == "validate":
             start_idx = int(length * TTV_SPLITS["train"] // 1) + 1
-            end_idx = length * int(TTV_SPLITS["train"] + TTV_SPLITS[dataset_id]) // 1
+            end_idx = int(length * (TTV_SPLITS["train"] + TTV_SPLITS[dataset_id]) // 1)
         elif dataset_id == "test":
-            start_idx = int(length * (length - TTV_SPLITS[dataset_id]) // 1) + 1
+            start_idx = int(length * (1 - TTV_SPLITS[dataset_id]) // 1) + 1
             end_idx = length
         else:
             raise KeyError(f"Unknown dataset: {dataset_id}")
