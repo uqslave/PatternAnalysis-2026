@@ -2,9 +2,10 @@ import os
 import numpy as np
 import torch
 import random
+import time
 from torchvision import transforms
 from dataset import LABELS, get_train_loader, get_validate_loader
-from modules import UNet, DiceLoss, dsc_per_class
+from modules import UNet, DiceLoss, dsc_per_class, AsymmetricUnifiedFocalLoss, DiceCELoss, TverskyCELoss
 
 # Set random seeds for reproducibility
 torch.manual_seed(67)
@@ -27,10 +28,11 @@ model = model.to(device)
 num_epochs = 36
 learning_rate = 0.00011
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-criterion = DiceLoss()
+criterion = TverskyCELoss(a=0.35, b=0.65, w=0.5)#DiceCELoss(w=0.5) # AsymmetricUnifiedFocalLoss() #DiceLoss()
 
 from pathlib import Path
 output_dir = Path("audit_out/")
+output_dir.mkdir(parents=True, exist_ok=True)
 
 losses = []
 val_losses = []
@@ -42,6 +44,9 @@ unet_report_test_temp = str()
 unet_report_path = output_dir / r"unet_report.txt"
 
 print("Training...")
+start_time = time.time()
+training_times = list()
+training_subtime = start_time
 for epoch in range(num_epochs):
     # ======== Training Segment ========
     model.train()
@@ -74,6 +79,8 @@ for epoch in range(num_epochs):
     accuracy_scores.append(1 - avg_loss)
     out_str = f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {avg_loss:.3f}"
 
+    training_subtime = time.time() - training_subtime
+    training_times.append(training_subtime)
     # ======== Validate Segment ========
     model.eval()
     with torch.no_grad():
@@ -97,12 +104,13 @@ for epoch in range(num_epochs):
     avg_validation_loss = validation_loss / len(validate_dataloader)
     val_losses.append(avg_validation_loss)
     val_accuracy_scores.append(1 - avg_validation_loss)
-    out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}"
+    out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}\tTime: {training_subtime:.3f}s"
     print(out_str)
+    training_subtime = time.time() - training_subtime
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-outpath = output_dir / f"unet_keras.pth"
+outpath = output_dir / f"unet_tce.pth"
 torch.save(model.state_dict(), outpath)
 print(f"Saved checkpoint to {outpath}")
 print("")
