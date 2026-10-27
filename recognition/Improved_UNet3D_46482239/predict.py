@@ -43,7 +43,7 @@ def run_inference(model, loader, device, test_batch_size):
             unet_report_test_temp = unet_report_test_temp + f"\n"
 
             fig_main, axes_main = plt.subplots(3, len(LABELS), figsize=(1440, 900, "px"))
-            sample_no = random.randint(0, test_batch_size - 1)
+            sample_no = random.randint(0, len(test_masks) - 1)
 
             # Generate coloured plot to highlight areas of greatest difference.
             # Blue -> dpx = 0, Red -> dpx = 1   Everything should be normalised to [0, 1] but idk how.
@@ -134,7 +134,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 model = UNet(in_channels=1, out_channels=len(LABELS), dropout_p=0.24)
 model = model.to(device)
 
-model_path = r"audit_out/unet_keras.pth"
+model_path = r"audit_out/unet_tce.pth"
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 
