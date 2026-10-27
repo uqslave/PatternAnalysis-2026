@@ -10,6 +10,9 @@ from tqdm import tqdm
 
 DATASET_PATH_2D = r"./home/groups/comp3710/HipMRI_Study_open/keras_slices_data"
 DATASET_PATH_3D = r"./home/groups/comp3710/HipMRI_Study_open"
+if not os.path.exists(DATASET_PATH_2D):
+    DATASET_PATH_2D = r"/home/groups/comp3710/HipMRI_Study_open/keras_slices_data"
+    DATASET_PATH_3D = r"/home/groups/comp3710/HipMRI_Study_open"
 
 # Dictionary of tuples of raw, mask pairs for 2D
 DATASET_2D_TYPES = {
@@ -52,7 +55,7 @@ class HipMRIDataset(torch.utils.data.Dataset):
         self.raw = load_data_2D(images, target_shape=(256, 144), normImage=True)
         self.mask = load_data_2D(masks, target_shape=(256, 144), categorical=True, num_classes=6, dtype=np.uint8)
 
-        self.label_values = (i for i in range(5))   # 0 - Background,
+        self.label_values = (i for i in range(6))   # 0 - Background,
                                                     # 1 - Body outline,
                                                     # 2 - Bone,
                                                     # 3 - Bladder,
