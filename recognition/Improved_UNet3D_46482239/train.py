@@ -5,7 +5,7 @@ import random
 import time
 from torchvision import transforms
 from dataset import LABELS, get_train_loader, get_validate_loader
-from modules import UNet, DiceLoss, dsc_per_class, AsymmetricUnifiedFocalLoss, DiceCELoss, TverskyCELoss
+from modules import UNet, DiceLoss, dsc_per_class, AsymmetricUnifiedFocalLoss, DiceCELoss, TverskyCELoss, ImprovedUnet
 
 # Set random seeds for reproducibility
 torch.manual_seed(67)
@@ -21,14 +21,14 @@ validate_dataloader = get_validate_loader()
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
-dropout = 0.23
-model = UNet(in_channels, out_channels, dropout)
+dropout = 0.18
+model = ImprovedUnet(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 36
-learning_rate = 0.00011
+num_epochs = 44
+learning_rate = 0.00022
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-criterion = TverskyCELoss(a=0.35, b=0.65, w=0.5)#DiceCELoss(w=0.5) # AsymmetricUnifiedFocalLoss() #DiceLoss()
+criterion = TverskyCELoss(a=0.26, b=0.74, w=0.5)#DiceCELoss(w=0.5) # AsymmetricUnifiedFocalLoss() #DiceLoss()
 
 from pathlib import Path
 output_dir = Path("audit_out/")
@@ -110,7 +110,7 @@ for epoch in range(num_epochs):
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-outpath = output_dir / f"unet_tce.pth"
+outpath = output_dir / f"unet_dscce.pth"
 torch.save(model.state_dict(), outpath)
 print(f"Saved checkpoint to {outpath}")
 print("")

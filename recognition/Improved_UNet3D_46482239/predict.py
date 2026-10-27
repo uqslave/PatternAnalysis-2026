@@ -10,7 +10,8 @@ from torchvision import transforms
 from pathlib import Path
 import math
 from dataset import get_test_loader, LABELS, TEST_BATCH_SIZE
-from modules import UNet, DiceLoss, dsc_per_class
+from modules import UNet, DiceLoss, dsc_per_class, ImprovedUnet
+
 
 def run_inference(model, loader, device, test_batch_size):
     # Four per row?
@@ -131,10 +132,10 @@ print(f"Using device: {device}")
 output_dir = Path("audit_out/")
 output_dir.mkdir(parents=True, exist_ok=True)
 
-model = UNet(in_channels=1, out_channels=len(LABELS), dropout_p=0.24)
+model = ImprovedUnet(in_channels=1, out_channels=len(LABELS), dropout_p=0.24)
 model = model.to(device)
 
-model_path = r"audit_out/unet_tce.pth"
+model_path = r"audit_out/unet_improved_tce(1).pth"
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 

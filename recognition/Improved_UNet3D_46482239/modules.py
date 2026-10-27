@@ -2,6 +2,96 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+
+class ResidualConvBlock(nn.Module):
+    """
+    Residual convolution block.
+    """
+
+    def __init__(self, in_channels, out_channels, dropout_p=0.2):
+        super().__init__()
+        self.block1 = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout(dropout_p)
+        )
+        self.block2_1 = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm2d(out_channels),
+        )
+        self.block2_2 = nn.Sequential(
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout(dropout_p)
+        )
+
+        # Shortcut connection to match dimensions if in_channels != out_channels
+        self.shortcut = nn.Sequential()
+        if in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.InstanceNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.block1(x)
+        out = self.block2_1(out)
+        out = out + residual    # Add residual shortcut before final activation
+        out = self.block2_2(out)
+        return out
+
+
+class ImprovedUnet(nn.Module):
+    """
+    Improved UNet model class using residual blocks
+    """
+    def __init__(self, in_channels, out_channels, dropout_p=0.2):
+        super().__init__()
+
+        # Encoder (downsampling) using Residual Blocks
+        self.encoder1 = ResidualConvBlock(in_channels, 32, dropout_p=dropout_p)
+        self.encoder2 = ResidualConvBlock(32, 64, dropout_p=dropout_p)
+        self.encoder3 = ResidualConvBlock(64, 128, dropout_p=dropout_p)
+        self.encoder4 = ResidualConvBlock(128, 256, dropout_p=dropout_p)
+
+        # Decoder (upsampling) using Residual Blocks
+        self.decoder4 = ResidualConvBlock(256 + 128, 128, dropout_p=dropout_p)
+        self.decoder3 = ResidualConvBlock(128 + 64, 64, dropout_p=dropout_p)
+        self.decoder2 = ResidualConvBlock(64 + 32, 32, dropout_p=dropout_p)
+        self.decoder1 = nn.Conv2d(32, out_channels, kernel_size=1)
+
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
+        self.act = nn.Softmax2d()
+
+        self.seg4 = nn.Conv2d(128, out_channels, kernel_size=1)     # d4: 1/4 resolution
+        self.seg3 = nn.Conv2d(64, out_channels, kernel_size=1)      # d3: 1/2 resolution
+
+    def forward(self, x):
+        # Encoder
+        e1 = self.encoder1(x)
+        e2 = self.encoder2(self.pool(e1))
+        e3 = self.encoder3(self.pool(e2))
+        e4 = self.encoder4(self.pool(e3))
+
+        # Decoder with skip connections
+        d4 = self.decoder4(torch.cat([self.upsample(e4), e3], dim=1))
+        d3 = self.decoder3(torch.cat([self.upsample(d4), e2], dim=1))
+        d2 = self.decoder2(torch.cat([self.upsample(d3), e1], dim=1))
+
+        # out = self.decoder1(d2)
+
+        # Deep supervision
+        s = self.seg4(d4)  # 1/4 res
+        s = self.upsample(s) + self.seg3(d3)  # 1/2 res
+        out = self.upsample(s) + self.decoder1(d2)  # full res
+
+        # Apply activation to final output
+        out = self.act(out)
+
+        return out
+
 class UNet(nn.Module):
     """
     UNet model class.
@@ -23,7 +113,7 @@ class UNet(nn.Module):
 
         self.pool = nn.MaxPool2d(2)
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.sigmoid = nn.Softmax2d()#nn.Sigmoid()     # Sigmoid act func for final output
+        self.act = nn.Softmax2d()
 
     def conv_block(self, in_channels, out_channels, dropout_p=0.2):
         return nn.Sequential(
@@ -51,8 +141,7 @@ class UNet(nn.Module):
         d2 = self.decoder2(torch.cat([self.upsample(d3), e1], dim=1))
         out = self.decoder1(d2)
 
-        # Apply sigmoid activation to final output
-        out = self.sigmoid(out)
+        out = self.act(out)
 
         return out
 
