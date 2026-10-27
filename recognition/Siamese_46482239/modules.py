@@ -18,60 +18,44 @@ class BasicBlock(nn.Module):
         out = self.dropout(out)
         return out
 
+def make_stages(in_channels: int, dim: int, n_stages: int, dropout_p: float):
+    """
+    n_stages stride-2 conv blocks; channels double each stage (dim, 2*dim, 4*dim, ...).
+    At 224x224 input (3x3 convs, no padding) the spatial size goes 224->111->55->27->13->6 for n_stages=5,
+    and the receptive field of the last layer grows to 63 px (vs 11 px for your 4-block stride-1/1/2/2 stack).
+    """
+    chans = [in_channels] + [dim * 2 ** i for i in range(n_stages)]
+    blocks = [BasicBlock(chans[i], chans[i + 1], 3, stride=2, dropout_p=dropout_p) for i in range(n_stages)]
+    return nn.Sequential(*blocks), chans[-1]
+
+
 class CNN(nn.Module):
-    def __init__(self, dim, in_channels, num_class=2, dropout_p=0.2):
+    """Baseline classifier. Shares the SAME backbone as CNNEmbed so the comparison is fair."""
+    def __init__(self, dim, in_channels, num_class=2, dropout_p=0.2, n_stages=5):
         super().__init__()
-        self.dim = dim
-        self.in_channels = in_channels
-        self.num_class = num_class
-        self.depth = pow(2, 4 - 1)
-        self.pooling_depth = self.depth * self.dim
-
-        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=1, dropout_p=dropout_p)
-        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=1, dropout_p=dropout_p)
-        self.block3 = BasicBlock(self.dim * 2, self.dim * 4, 3, stride=2, dropout_p=dropout_p)
-        self.block4 = BasicBlock(self.dim * 4, self.dim * 8, 3, stride=2, dropout_p=dropout_p)
-
+        self.stages, self.pooling_depth = make_stages(in_channels, dim, n_stages, dropout_p)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Linear(self.pooling_depth, self.num_class)
+        self.classifier = nn.Linear(self.pooling_depth, num_class)
 
     def forward(self, x):
-        x = self.block1(x)
-        x = self.block2(x)
-        x = self.block3(x)
-        x = self.block4(x)
-        out = self.avg_pool(x)
-        out = out.view(out.size(0), -1)  # flatten
-        return self.classifier(out)
+        out = self.avg_pool(self.stages(x))
+        return self.classifier(out.view(out.size(0), -1))
+
 
 class CNNEmbed(nn.Module):
-    def __init__(self, dim, in_channels: int, embed_dims: int = 128, dropout_p: float = 0.2, normalise: bool = True):
+    def __init__(self, dim, in_channels: int, embed_dims: int = 128, dropout_p: float = 0.2,
+                 normalise: bool = True, n_stages: int = 5):
         super().__init__()
-        self.dim = dim
-        self.in_channels = in_channels
-        self.embed_dims = embed_dims
         self.normalise = normalise
-        self.depth = pow(2, 4 - 1)
-        self.pooling_depth = self.depth * self.dim
-
-        self.block1 = BasicBlock(self.in_channels, self.dim, 3, stride=1, dropout_p=dropout_p)
-        self.block2 = BasicBlock(self.dim, self.dim * 2, 3, stride=1, dropout_p=dropout_p)
-        self.block3 = BasicBlock(self.dim * 2, self.dim * 4, 3, stride=2, dropout_p=dropout_p)
-        self.block4 = BasicBlock(self.dim * 4, self.dim * 8, 3, stride=2, dropout_p=dropout_p)
-
+        self.stages, self.pooling_depth = make_stages(in_channels, dim, n_stages, dropout_p)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.embed = nn.Linear(self.pooling_depth, self.embed_dims)
+        self.embed = nn.Linear(self.pooling_depth, embed_dims)
 
     def forward(self, x) -> torch.Tensor:
-        x = self.block1(x)
-        x = self.block2(x)
-        x = self.block3(x)
-        x = self.block4(x)
-        out = self.avg_pool(x)
-        out = out.view(out.size(0), -1)  # flatten
-        out = self.embed(out)
+        out = self.avg_pool(self.stages(x))
+        out = self.embed(out.view(out.size(0), -1))
         if self.normalise:
-            out = F.normalize(out, dim = 1) # Optional: normalises embedding
+            out = F.normalize(out, dim=1)   # unit-length embeddings
         return out
 
 

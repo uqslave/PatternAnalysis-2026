@@ -1,3 +1,4 @@
+import math
 import random
 
 import kagglehub
@@ -23,17 +24,18 @@ def download_isic() -> None:
     path = kagglehub.dataset_download(handle = DATASET_HANDLE, output_dir = DATASET_PATH)
     print("Path to dataset files:", path)
 
-BENIGN, MALIGNANT = 0.0, 1.0
+SEED = 0
+BENIGN, MALIGNANT = 0, 1
 IMAGE_DIMS = (224, 224)
 RGB_MEAN, RGB_STD = (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)
 BATCH_SIZES = {
-    "train": 160,
-    "validate": 120,
-    "test": 145,
+    "train": 125,
+    "validate": 80,
+    "test": 100,
 }
 SHUFFLE = {
     "train": True,
-    "validate": True,
+    "validate": False,
     "test": False,
 }
 TRANSFORMS = {
@@ -41,19 +43,19 @@ TRANSFORMS = {
         transforms.Resize((224, 224)),
         # transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(180),
+        transforms.RandomVerticalFlip(),
         transforms.ToTensor(),
         transforms.Normalize(RGB_MEAN, RGB_STD),
         transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
     ]),
     "validate": transforms.Compose([
-        transforms.Resize(IMAGE_DIMS), transforms.RandomHorizontalFlip(),
+        transforms.Resize(IMAGE_DIMS),
         transforms.ToTensor(), transforms.Normalize(RGB_MEAN, RGB_STD),
-        transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value=0)
     ]),
     "test": transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(RGB_MEAN,  # mean R, G, B empirical standard
-                             RGB_STD),  # std R, G, B empirical standard
+        transforms.Resize(IMAGE_DIMS),
+        transforms.ToTensor(), transforms.Normalize(RGB_MEAN, RGB_STD),
     ]),
 }
 TTV_SPLITS = {
@@ -61,10 +63,12 @@ TTV_SPLITS = {
     "validate": 0.10,
     "test":     0.14,
 }
-assert sum(TTV_SPLITS.values()) == 1.0, "Train/Test/Validate proportion must sum to 1.0"
+assert math.isclose(sum(TTV_SPLITS.values()), 1.0), "Train/Test/Validate proportion must sum to 1.0"
 
 def get_isic_pairloader(dataset_id: str):
-    dataset = PairData(dataset_id)
+    # Train: fresh random pairs every epoch. Validate/test: fixed pairs so metrics are comparable across epochs.
+    pair_seed = None if dataset_id == "train" else SEED
+    dataset = PairData(dataset_id, seed = pair_seed)
     return DataLoader(dataset, batch_size = BATCH_SIZES[dataset_id], shuffle = SHUFFLE[dataset_id], num_workers=0)
 
 
@@ -106,30 +110,32 @@ class ISICMelanomaDataset(Dataset):
         :param isic_data: Loaded into a list
         :return: Data with patient-level split
         """
-        read_patient_id = set()
-        patient_data = dict()  # ISIC data with patient split
+        parent = dict()
 
-        for row in isic_data:
-            isic_id, patient_ids, target = row
-            patient_id_split = patient_ids.split(",")
-            patient_ids = patient_id_split
+        def find(a):
+            parent.setdefault(a, a)
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
 
-            result = all(item in read_patient_id for item in patient_ids)
-            if not result:
-                read_patient_id.add(patient_ids[0])
-            id_to_use = ""
-            for patient_id in patient_ids:
-                if patient_id in read_patient_id:
-                    id_to_use = patient_id
-                    break
-            if id_to_use not in patient_data.keys():
-                patient_data[id_to_use] = dict()
-            patient_data[id_to_use].update({isic_id: int(float(target))})
+        for _, patient_ids, _ in isic_data:
+            ids = patient_ids.split(",")
+            root = find(ids[0])
+            for other in ids[1:]:
+                parent[find(other)] = root   # merge all IDs belonging to the same patient
+
+        patient_data = dict()  # one entry per real patient
+        for isic_id, patient_ids, target in isic_data:
+            patient_key = find(patient_ids.split(",")[0])
+            patient_data.setdefault(patient_key, dict())[isic_id] = int(float(target))
 
         return patient_data
 
     ISIC_DATA = load_isic_csv()
     PATIENT_SPLIT_DATA = patient_split(ISIC_DATA)
+    PATIENT_ORDER = sorted(PATIENT_SPLIT_DATA.items())   # deterministic base order
+    random.Random(SEED).shuffle(PATIENT_ORDER)           # shuffled ONCE, identical for every split
 
     def __init__(self, dataset_id: str, img_dim: tuple[int, int], transform: transforms.Compose = None) -> None:
         super().__init__()
@@ -137,25 +143,14 @@ class ISICMelanomaDataset(Dataset):
         self._img_dim = img_dim
         self._transform = transform
 
-        # Train: first x% of patients
-        # Validate: next y% of patients
-        # Test: last z% of patients
-        start_idx = end_idx = -1
-        length = len(self.PATIENT_SPLIT_DATA.keys())
-        if dataset_id == "train":
-            start_idx = 0
-            end_idx = int(length * TTV_SPLITS[dataset_id] // 1)
-        elif dataset_id == "validate":
-            start_idx = int(length * TTV_SPLITS["train"] // 1) + 1
-            end_idx = int(length * (TTV_SPLITS["train"] + TTV_SPLITS[dataset_id]) // 1)
-        elif dataset_id == "test":
-            start_idx = int(length * (1 - TTV_SPLITS[dataset_id]) // 1) + 1
-            end_idx = length
-        else:
+        # Patients are shuffled once (seeded) at class level, then cut into contiguous train/validate/test blocks.
+        n = len(self.PATIENT_ORDER)
+        n_train = int(n * TTV_SPLITS["train"])
+        n_val_end = int(n * (TTV_SPLITS["train"] + TTV_SPLITS["validate"]))
+        bounds = {"train": (0, n_train), "validate": (n_train, n_val_end), "test": (n_val_end, n)}
+        if dataset_id not in bounds:
             raise KeyError(f"Unknown dataset: {dataset_id}")
-        dataset_whole = list(self.PATIENT_SPLIT_DATA.items())
-        random.shuffle(dataset_whole)
-        self._dataset = dataset_whole[start_idx:end_idx]
+        self._dataset = self.PATIENT_ORDER[bounds[dataset_id][0]:bounds[dataset_id][1]]
         images = list()
         labels = list()
         for patient_data in self._dataset:
@@ -191,43 +186,40 @@ class ISICMelanomaDataset(Dataset):
 
 class PairData(Dataset):
     """
-    Randomly choose one for the first image the try forcing 50:50 chance for second image.
+    Class-balanced pair sampling (stores indices only; images are loaded lazily in __getitem__).
+      1. anchor class chosen 50/50 (benign / malignant), anchor drawn from that class
+      2. partner is the same class with probability POSITIVE_RATIO, otherwise the other class
+    Returns ((image1, label1), (image2, label2)).
+    seed=None -> fresh random pairs each call; seed=int -> index always maps to the same pair.
     """
-    FORCED = 0.50   # Chance of getting malignant scan as second image.
+    POSITIVE_RATIO = 0.50   # probability that a pair is same-class
 
-    def __init__(self, dataset_id: str) -> None:
+    def __init__(self, dataset_id: str, seed: int | None = None) -> None:
         super().__init__()
         self._dataset_id = dataset_id
-        self._dataset = self._load_isic_dataset(dataset_id)
-        self._benigns, self._malignants = self._extract_scans()
+        self._seed = seed
+        self._dataset = ISICMelanomaDataset(dataset_id, IMAGE_DIMS, TRANSFORMS[dataset_id])
+        labels = self._dataset._labels
+        self._pools = {
+            BENIGN: [i for i, l in enumerate(labels) if l == BENIGN],
+            MALIGNANT: [i for i, l in enumerate(labels) if l == MALIGNANT],
+        }
+        if not self._pools[BENIGN] or not self._pools[MALIGNANT]:
+            raise ValueError(f"'{dataset_id}' split lacks one class; cannot form negative pairs.")
 
     def __len__(self) -> int:
         return len(self._dataset)
 
-    def __getitem__(self, index: int) -> tuple[tuple[Tensor, Tensor], tuple[Tensor, Tensor]]:
-        choice1 = self._dataset[index]  # Dataset is shuffled when loaded.
-        if random.random() < self.FORCED:   # Randomly sample from malignant scans
-            choice2 = random.choice(tuple(self._malignants))
-        else:                               # Randomly sample from self._dataloader again
-            random_index = (index + random.randint(1, len(self._dataset) - 1)) % len(self._dataset)
-            choice2 = self._dataset[random_index]
-        return choice1, choice2
-
-    def _load_isic_dataset(self, dataset_id: str) -> ISICMelanomaDataset:
-        transform = TRANSFORMS[dataset_id]
-        return ISICMelanomaDataset(dataset_id, IMAGE_DIMS, transform)
-
-    def _extract_scans(self) -> tuple[tuple[tuple[Tensor, Tensor]], tuple[tuple[Tensor, Tensor]]]:
-        benign_scans = list()
-        malignant_scans = list()
-        for image, label in self._dataset:
-            if label == MALIGNANT:
-                malignant_scans.append((image, label),)
-            elif label == BENIGN:
-                benign_scans.append((image, label),)
-            else:
-                raise KeyError(f"Unknown label: {label}; Data labels not processed correctly")
-        return tuple(benign_scans), tuple(malignant_scans)
+    def __getitem__(self, index: int):
+        rng = random.Random(self._seed + index) if self._seed is not None else random
+        anchor_cls = rng.choice((BENIGN, MALIGNANT))
+        partner_cls = anchor_cls if rng.random() < self.POSITIVE_RATIO else 1 - anchor_cls
+        i = rng.choice(self._pools[anchor_cls])
+        j = rng.choice(self._pools[partner_cls])
+        if partner_cls == anchor_cls and len(self._pools[anchor_cls]) > 1:
+            while j == i:                      # never pair an image with itself
+                j = rng.choice(self._pools[partner_cls])
+        return self._dataset[i], self._dataset[j]
 
 
 class DataAudit:
@@ -308,4 +300,3 @@ class DataAudit:
 if __name__ == "__main__":
     isic_data_audit = DataAudit()
     print(isic_data_audit)
-

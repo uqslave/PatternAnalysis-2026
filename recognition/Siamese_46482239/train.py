@@ -1,88 +1,91 @@
-import random
 import numpy as np
 import torch
+import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from pathlib import Path
+from sklearn.metrics import roc_auc_score
 
 from modules import SiameseNetwork, CNNEmbed, ContrastiveLoss
-from dataset import get_isic_pairloader, PairData
+from dataset import get_isic_pairloader
 
 # ----------------------------- config -----------------------------
-EPOCHS = 15
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print("Using device:", device)
+EPOCHS = 28
+DIM, IN_CHANNELS, EMBED_DIMS = 16, 3, 256
+DROPOUT, NORMALISE, N_STAGES = 0.23, True, 5
+LEARNING_RATE = 0.0003
+MARGIN = 1.0
+CKPT_PATH = "siamese_best.pt"
+SEED = 0
 
 
-dim = 16
-in_channels = 3 # RGB
-embed_dims = 256
-dropout = 0.21
-normalise = True
-learning_rate = 0.0002
+def pair_labels(labels1: torch.Tensor, labels2: torch.Tensor) -> torch.Tensor:
+    """0 = same class, 1 = different class (matches ContrastiveLoss)."""
+    return (labels1 != labels2).float()
 
-# Test ---------------------------------------------------------
-#train_pair = PairData("train")
-#print(train_pair[0])
-#print("\nLength: ", len(train_pair))
-# --------------------------------------------------------------
 
-train_pair_loader = get_isic_pairloader("train")
-validate_pair_loader = get_isic_pairloader("validate")
+def run_epoch(model, loader, criterion, device, optimiser=None):
+    """Trains if an optimiser is given, otherwise evaluates. Returns loss, pair accuracy, pair AUROC."""
+    training = optimiser is not None
+    model.train(training)
+    losses, dists, targets = [], [], []
+    with torch.set_grad_enabled(training):
+        for (images1, labels1), (images2, labels2) in loader:
+            images1, images2 = images1.to(device), images2.to(device)
+            pairs = pair_labels(labels1, labels2).to(device)
 
-encoder = CNNEmbed(dim, in_channels, embed_dims, dropout, normalise)
-model = SiameseNetwork(encoder)
-model.to(device)
-optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-criterion = ContrastiveLoss()
+            emb1, emb2 = model(images1, images2)
+            loss = criterion(emb1, emb2, pairs)
 
-print("Training model...")
-training_losses = []
-validate_losses = []
-for epoch in range(EPOCHS):
-    print("Epoch: ", epoch + 1)
-    batch_loss = []
+            if training:
+                optimiser.zero_grad()
+                loss.backward()
+                optimiser.step()
 
-    model.train()
-    for batch_idx, (scans1, scans2) in enumerate(train_pair_loader):
-        # print("\tBatch: ", batch_idx, end = "\t")
+            losses.append(loss.item())
+            dists.append(F.pairwise_distance(emb1, emb2).detach().cpu())
+            targets.append(pairs.cpu())
+    d, t = torch.cat(dists), torch.cat(targets)
+    pair_acc = ((d > MARGIN / 2).float() == t).float().mean().item()
+    try:
+        pair_auroc = roc_auc_score(t.numpy(), d.numpy())   # distance as score for "different"
+    except ValueError:
+        pair_auroc = float("nan")
+    return float(np.mean(losses)), pair_acc, pair_auroc
 
-        images1, labels1 = scans1
-        images2, labels2 = scans2
 
-        images1, labels1 = images1.to(device), labels1.to(device)
-        images2, labels2 = images2.to(device), labels2.to(device)
-        pairs = (labels1 != labels2).float()
+def main():
+    torch.manual_seed(SEED)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
 
-        embedding1, embedding2 = model(images1, images2)
+    train_loader = get_isic_pairloader("train")
+    validate_loader = get_isic_pairloader("validate")
 
-        loss = criterion(embedding1, embedding2, pairs)
-        optimiser.zero_grad()
-        loss.backward()
-        optimiser.step()
+    model = SiameseNetwork(CNNEmbed(DIM, IN_CHANNELS, EMBED_DIMS, DROPOUT, NORMALISE, N_STAGES)).to(device)
+    optimiser = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    criterion = ContrastiveLoss(margin=MARGIN)
 
-        batch_loss.append(loss.item())
-        print("Loss: ", loss.item())
-    training_losses.append(np.mean(batch_loss))
-    batch_loss.clear()
+    train_losses, val_losses, best_auroc = [], [], -1.0
+    print("Training model...")
+    for epoch in range(1, EPOCHS + 1):
+        tr_loss, tr_acc, _ = run_epoch(model, train_loader, criterion, device, optimiser)
+        va_loss, va_acc, va_auroc = run_epoch(model, validate_loader, criterion, device)
+        train_losses.append(tr_loss); val_losses.append(va_loss)
+        print(f"Epoch {epoch:2d} | train loss {tr_loss:.4f} acc {tr_acc:.3f} | "
+              f"val loss {va_loss:.4f} acc {va_acc:.3f} pair-AUROC {va_auroc:.3f}")
 
-    print("Validation model...")
-    model.eval()
-    with torch.no_grad():
-        for batch_idx, (scans1, scans2) in enumerate(validate_pair_loader):
-            images1, labels1 = scans1
-            images2, labels2 = scans2
-            images1, labels1 = images1.to(device), labels1.to(device)
-            images2, labels2 = images2.to(device), labels2.to(device)
-            pairs = (labels1 != labels2).float()
-            embedding1, embedding2 = model(images1, images2)
-            loss = criterion(embedding1, embedding2, pairs)
-            batch_loss.append(loss.item())
-    validate_losses.append(np.mean(batch_loss))
+        if va_auroc > best_auroc:
+            best_auroc = va_auroc
+            torch.save({"model": model.state_dict(),
+                        "config": dict(dim=DIM, in_channels=IN_CHANNELS, embed_dims=EMBED_DIMS,
+                                       dropout=DROPOUT, normalise=NORMALISE, n_stages=N_STAGES, margin=MARGIN)}, CKPT_PATH)
+            print(f"  saved checkpoint (val pair-AUROC {va_auroc:.3f})")
 
-x = np.linspace(1, EPOCHS)
-plt.plot(training_losses, label="Training Loss", color="blue")
-plt.plot(validate_losses, label="Validation Loss", color="red")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.legend()
-plt.show()
+    plt.plot(train_losses, label="Training Loss", color="blue")
+    plt.plot(val_losses, label="Validation Loss", color="red")
+    plt.xlabel("Epoch"); plt.ylabel("Loss"); plt.legend()
+    plt.savefig("loss_curves.png", dpi=150)
+    plt.show()
+
+
+if __name__ == "__main__":
+    main()
