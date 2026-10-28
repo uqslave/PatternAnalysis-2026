@@ -147,7 +147,7 @@ class UNet(nn.Module):
 
 
 class AsymmetricUnifiedFocalLoss(nn.Module):
-    def __init__(self, lam=0.5, delta=0.6, gamma=0.5, common=(0, 1), smooth=1.0):
+    def __init__(self, lam=0.5, delta=0.6, gamma=0.5, common=(0, 1), smooth=0.5):
         super().__init__()
         self.lam, self.delta, self.gamma = lam, delta, gamma
         self.common, self.smooth = list(common), smooth
@@ -183,7 +183,7 @@ class DiceCELoss(nn.Module):
     probs : softmax output [B, K, H, W]
     onehot: ground truth   [B, K, H, W]
     """
-    def __init__(self, w: float = 0.5, smooth: float = 1.0):
+    def __init__(self, w: float = 0.5, smooth: float = 0.5):
         super().__init__()
         self.w = w
         self.dice = DiceLoss(smooth=smooth)
@@ -200,7 +200,7 @@ class TverskyLoss(nn.Module):
     a weights false positives, b weights false negatives.
     a = b = 0.5 is the Dice loss; b > a penalises misses more than false alarms.
     """
-    def __init__(self, a: float = 0.4, b: float = 0.6, smooth: float = 1.0):
+    def __init__(self, a: float = 0.4, b: float = 0.6, smooth: float = 1):
         super().__init__()
         self.a, self.b, self.smooth = a, b, smooth
 
@@ -223,7 +223,7 @@ class TverskyCELoss(nn.Module):
     onehot: ground truth   [B, K, H, W]
     a = b = 0.5 reduces to Dice + CE.
     """
-    def __init__(self, a: float = 0.4, b: float = 0.6, w: float = 0.5, smooth: float = 1.0):
+    def __init__(self, a: float = 0.4, b: float = 0.6, w: float = 0.5, smooth: float = 1.):
         super().__init__()
         self.tversky = TverskyLoss(a, b, smooth)
         self.w = w
@@ -237,7 +237,7 @@ class DiceLoss(nn.Module):
     """
     Dice Loss (DSC) class.
     """
-    def __init__(self, smooth: float= 0.2):
+    def __init__(self, smooth: float= 1.0):
         """
         :param smooth: Prevent division by zero
         """
@@ -270,23 +270,21 @@ class DiceLoss(nn.Module):
         targets = targets.reshape(B, K, -1).float()
 
         # Calculate intersection and union
-        intersection = (predictions * targets).sum(dim=2)                           # [B, K]
-        union = predictions.sum(dim=2) + targets.sum(dim=2)                         # [B, K]
-        dice_per_class = (2 * intersection + self.smooth) / (union + self.smooth)   # [B, K]
+        intersection = (predictions * targets).sum(dim=2)                           # intersection.shape    [B, K]
+        union = predictions.sum(dim=2) + targets.sum(dim=2)                         # union.shape           [B, K]
+        dice_per_class = (2 * intersection + self.smooth) / (union + self.smooth)   # dsc.shape             [B, K]
 
         return 1 - dice_per_class.mean()
 
 
 @torch.no_grad()
-def dsc_per_class(predictions, targets, smooth=0.2):
+def dsc_per_class(predictions, targets, smooth=1.):
     """
     Returns a tensor of shape [K] with the Dice score for each class, averaged over the batch.
     """
     B, C, _, _ = predictions.shape
-    #predictions = (predictions > 0.5).float()
-    predictions = torch.argmax(predictions, dim=1)
-    predictions = F.one_hot(predictions, num_classes=C).permute(0, 3, 1, 2).float()
-    predictions = predictions.reshape(B, C, -1)
+    predictions = (predictions > 0.5).float()
+    predictions = predictions.reshape(B, C, -1) # Becomes [B, K, HxW]
     targets = targets.reshape(B, C, -1).float()
 
     intersection = (predictions * targets).sum(dim=2)
