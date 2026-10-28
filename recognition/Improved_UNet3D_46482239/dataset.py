@@ -52,8 +52,8 @@ class HipMRIDataset(torch.utils.data.Dataset):
 
         # Need to load train, test, and validation sets for 2D
         # For 3D, we need to split it ourselves
-        self.raw = load_data_2D(images, target_shape=(256, 144), normImage=True)
-        self.mask = load_data_2D(masks, target_shape=(256, 144), categorical=True, num_classes=6, dtype=np.uint8)
+        self.raw = load_data_2D(images, target_shape=img_dim, normImage=True)
+        self.mask = load_data_2D(masks, target_shape=img_dim, categorical=True, num_classes=6, dtype=np.uint8)
 
         self.label_values = (i for i in range(6))   # 0 - Background,
                                                     # 1 - Body outline,
@@ -91,7 +91,11 @@ def fit_to_shape(img, target_shape: tuple[int, int]):
     height, width = img.shape
     target_height, target_width = target_shape
 
-    if target_height < height or target_width < width:
+    if target_height <= height and target_width <= width:
+        dy = height // 2 - target_height // 2
+        dx = width // 2 - target_width // 2
+        return img[dy : height - dy, dx : width - dx]
+    if (target_height <= height and target_width > width) or (target_height >= height and target_width < width):
         return None     # Or change to raise an error
 
     # Using centre padding
@@ -180,10 +184,10 @@ def load_data_2D(imageNames, target_shape=(256, 128), normImage=False,
 
 # ======================================================================================================================
 LABELS = ("Background", "Body Outline", "Bone", "Bladder", "Rectum", "Prostate")
-IMAGE_SIZE = (256, 144)
-TRAIN_BATCH_SIZE = 106
-TEST_BATCH_SIZE = 40
-VALIDATE_BATCH_SIZE = 56
+IMAGE_SIZE = (256, 128)
+TRAIN_BATCH_SIZE = 54
+TEST_BATCH_SIZE = 50
+VALIDATE_BATCH_SIZE = 37
 
 def get_train_loader() -> DataLoader:
     train_dataset = HipMRIDataset("train", IMAGE_SIZE)
