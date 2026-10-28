@@ -7,9 +7,9 @@ import matplotlib as mpl
 import torch.nn.functional as F
 from pathlib import Path
 import math
-from dataset import get_test_loader, LABELS, TEST_BATCH_SIZE
+from dataset import LABELS, BATCH_SIZE_2D, get_dataloader_2d
 from modules import UNet, DiceLoss, dsc_per_class, ImprovedUnet
-
+TEST_BATCH_SIZE = BATCH_SIZE_2D["test"]
 
 def run_inference(model, loader, device, test_batch_size):
     # Four per row?
@@ -79,11 +79,10 @@ def run_inference(model, loader, device, test_batch_size):
             cum_sub_title = f"Cum Diff Batch {bidx + 1}"
 
             # Cumulative difference masks
-            im_cum_diff = axes_cum_diff[cum_rows, cum_cols].imshow(diff_in_masks_cum.cpu().squeeze(), cmap="seismic",
-                                                                   vmin=-1.0, vmax=1.0)
-            fig_cum_diff.colorbar(im_cum_diff, orientation='vertical')
-            axes_cum_diff[cum_rows, cum_cols].axis("off")
-            axes_cum_diff[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
+            #im_cum_diff = axes_cum_diff[cum_rows, cum_cols].imshow(diff_in_masks_cum.cpu().squeeze(), cmap="seismic", vmin=-1.0, vmax=1.0)
+            #fig_cum_diff.colorbar(im_cum_diff, orientation='vertical')
+            #axes_cum_diff[cum_rows, cum_cols].axis("off")
+            #axes_cum_diff[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
 
             # Cumulative mask
             cum_mask = torch.zeros_like(predictions[sample_no][0]).to(device)
@@ -97,11 +96,10 @@ def run_inference(model, loader, device, test_batch_size):
                     class_mask
                 )
                 cum_mask = torch.add(cum_mask, class_mask_ceil)
-            im_cum = axes_cum[cum_rows, cum_cols].imshow(cum_mask.cpu().squeeze(), cmap=four_colour_cmap, vmin=0.0,
-                                                         vmax=len(LABELS))
-            fig_cum.colorbar(im_cum, orientation='vertical')
-            axes_cum[cum_rows, cum_cols].axis("off")
-            axes_cum[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
+            #im_cum = axes_cum[cum_rows, cum_cols].imshow(cum_mask.cpu().squeeze(), cmap=four_colour_cmap, vmin=0.0, vmax=len(LABELS))
+            #fig_cum.colorbar(im_cum, orientation='vertical')
+            #axes_cum[cum_rows, cum_cols].axis("off")
+            #axes_cum[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
 
     fig_cum_diff.suptitle("Cumulative Difference Between GND Truth and Reconstructed Masks", fontsize=18)
     out_path = output_dir / f"cum_diff_in_masks_{len(loader)}_batches.png"
@@ -122,14 +120,14 @@ def run_inference(model, loader, device, test_batch_size):
     return unet_report_test_temp
 
 
-test_dataloader = get_test_loader()
+test_dataloader = get_dataloader_2d("test")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"Using device: {device}")
 output_dir = Path("audit_out/")
 output_dir.mkdir(parents=True, exist_ok=True)
 
-model = ImprovedUnet(in_channels=1, out_channels=len(LABELS), dropout_p=0.24)
+model = ImprovedUnet(in_channels=1, out_channels=len(LABELS))
 model = model.to(device)
 
 model_path = r"audit_out/unet_improved_dsc.pth"
