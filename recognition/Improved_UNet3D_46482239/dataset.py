@@ -374,37 +374,47 @@ def subset_sum_pick(sizes, target):
 
 LABELS = ("Background", "Body Outline", "Bone", "Bladder", "Rectum", "Prostate")
 IMAGE_SIZE = (256, 128)
-TRAIN_BATCH_SIZE = 102
-TEST_BATCH_SIZE = 63
-VALIDATE_BATCH_SIZE = 37
+BATCH_SIZE_2D = {
+    "train":    75,
+    "validate": 37,
+    "test":     42,
+}
+BATCH_SIZE_3D = {
+    "train": 6,
+    "validate": 3,
+    "test": 4,
+}
 
-SPLIT_PROPS = (
+SPLIT_PROPS = ( # For 3D scans
     0.7,    # Train
     0.2,    # Test
     0.1,    # Validate
 )
+assert sum(SPLIT_PROPS) == 1.0, "Split ratios not correct!"
+"""
 images = sorted(glob.glob(os.path.join(DATASET_3D_TYPES["raw"], "*.nii*")))
 masks = sorted(glob.glob(os.path.join(DATASET_3D_TYPES["mask"], "*.nii*")))
 RAW_COMPILED, MASKS_COMPILED, RAW, MASKS = preload3D(images, masks)
 PATIENT_SPLIT = split3D(images, masks)
 SPLIT = {
-    "train": PATIENT_SPLIT[0],
+    "train":    PATIENT_SPLIT[0],
     "validate": PATIENT_SPLIT[1],
-    "test": PATIENT_SPLIT[2],
+    "test":     PATIENT_SPLIT[2],
 }
+"""
+def get_dataloader_2d(dataset: str) -> DataLoader:
+    mri_dataset = HipMRIDataset(dataset, IMAGE_SIZE)
+    shuffle = False
+    if dataset == "train" or dataset == "test":
+        shuffle = True
+    return DataLoader(mri_dataset, batch_size = BATCH_SIZE_2D[dataset], shuffle = shuffle)
 
-def get_train_loader() -> DataLoader:
-    train_dataset = HipMRIDataset("train", IMAGE_SIZE)
-    return DataLoader(train_dataset, batch_size = TRAIN_BATCH_SIZE, shuffle=True)
-
-def get_test_loader() -> DataLoader:
-    test_dataset = HipMRIDataset("test", IMAGE_SIZE)
-    return DataLoader(test_dataset, batch_size = TEST_BATCH_SIZE, shuffle=True)
-
-def get_validate_loader() -> DataLoader:
-    validate_dataset = HipMRIDataset("validate", IMAGE_SIZE)
-    return DataLoader(validate_dataset, batch_size = VALIDATE_BATCH_SIZE, shuffle=True)
-
+def get_dataloader_3d(dataset: str) -> DataLoader:
+    mri_dataset = HipMRI3DDataset("train")
+    shuffle = False
+    if dataset == "train" or dataset == "test":
+        shuffle = True
+    return DataLoader(mri_dataset, batch_size = BATCH_SIZE_3D[dataset], shuffle=shuffle)
 
 if __name__ == "__main__":
     # Try loading in data

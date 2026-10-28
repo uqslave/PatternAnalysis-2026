@@ -7,8 +7,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from pathlib import Path
 from torchvision import transforms
-from dataset import LABELS, get_train_loader, get_validate_loader
-from modules import UNet, DiceLoss, dsc_per_class, AsymmetricUnifiedFocalLoss, DiceCELoss, TverskyCELoss, ImprovedUnet
+from dataset import LABELS, get_dataloader_2d
+from modules import UNet, dsc_per_class, DiceCELoss, TverskyCELoss, ImprovedUnet
 
 # Set random seeds for reproducibility
 torch.manual_seed(67)
@@ -19,20 +19,20 @@ torch.cuda.manual_seed(67)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device.type)
 
-train_dataloader = get_train_loader()
-validate_dataloader = get_validate_loader()
+train_dataloader = get_dataloader_2d("train")
+validate_dataloader = get_dataloader_2d("validate")
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
-dropout = 0.20
+dropout = 0.23
 model = ImprovedUnet(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 36
-learning_rate = 0.001
+num_epochs = 30
+learning_rate = 0.002
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.66, patience=3)
-criterion = DiceLoss()#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.26, patience=2)
+criterion = DiceCELoss(w=0.5)#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
 
 
 output_dir = Path("audit_out/")

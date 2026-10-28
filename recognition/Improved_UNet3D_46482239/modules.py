@@ -183,15 +183,15 @@ class DiceCELoss(nn.Module):
     probs : softmax output [B, K, H, W]
     onehot: ground truth   [B, K, H, W]
     """
-    def __init__(self, w: float = 0.5, smooth: float = 0.5):
+    def __init__(self, w: float = 0.5, smooth: float = 1.0):
         super().__init__()
         self.w = w
         self.dice = DiceLoss(smooth=smooth)
 
-    def forward(self, probs, onehot):
-        onehot = onehot.float()
-        ce = -(onehot * torch.log(probs.clamp(min=1e-7))).sum(dim=1).mean()   # per-pixel CE, averaged over B, H, W
-        return self.w * self.dice(probs, onehot) + (1 - self.w) * ce
+    def forward(self, predictions, targets):
+        targets = targets.float()
+        ce = -(targets * torch.log(predictions.clamp(min=1e-3))).sum(dim=1).mean()   # per-pixel CE, averaged over B, H, W
+        return self.w * self.dice(predictions, targets) + (1 - self.w) * ce
 
 
 class TverskyLoss(nn.Module):
@@ -223,7 +223,7 @@ class TverskyCELoss(nn.Module):
     onehot: ground truth   [B, K, H, W]
     a = b = 0.5 reduces to Dice + CE.
     """
-    def __init__(self, a: float = 0.4, b: float = 0.6, w: float = 0.5, smooth: float = 1.):
+    def __init__(self, a: float = 0.4, b: float = 0.6, w: float = 0.5, smooth: float = 0.5):
         super().__init__()
         self.tversky = TverskyLoss(a, b, smooth)
         self.w = w
@@ -237,7 +237,7 @@ class DiceLoss(nn.Module):
     """
     Dice Loss (DSC) class.
     """
-    def __init__(self, smooth: float= 1.0):
+    def __init__(self, smooth: float= 0.5):
         """
         :param smooth: Prevent division by zero
         """
