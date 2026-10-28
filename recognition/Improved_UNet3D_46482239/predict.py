@@ -4,9 +4,7 @@ import numpy as np
 import random
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-import os
-from PIL import Image
-from torchvision import transforms
+import torch.nn.functional as F
 from pathlib import Path
 import math
 from dataset import get_test_loader, LABELS, TEST_BATCH_SIZE
@@ -29,8 +27,10 @@ def run_inference(model, loader, device, test_batch_size):
             test_images = test_images.to(device)
             test_masks = test_masks.to(device)
 
-            outputs = model(test_images)
-            scores = dsc_per_class(outputs, test_masks)
+            predictions = model(test_images)
+            predictions = torch.argmax(predictions, dim=1)  # Becomes [B, H, W]
+            predictions = F.one_hot(predictions, num_classes=len(LABELS)).permute(0, 3, 1, 2).float()  # Back to [B, K, H, W]
+            scores = dsc_per_class(predictions, test_masks)
             dcs_scores = torch.cat([dcs_scores, scores.reshape(-1, len(LABELS))], 0)
 
             print(f"Test batch {bidx + 1}/{len(loader)} DSC Scores: ")
@@ -46,14 +46,11 @@ def run_inference(model, loader, device, test_batch_size):
             fig_main, axes_main = plt.subplots(3, len(LABELS), figsize=(1440, 900, "px"))
             sample_no = random.randint(0, len(test_masks) - 1)
 
-            # Generate coloured plot to highlight areas of greatest difference.
-            # Blue -> dpx = 0, Red -> dpx = 1   Everything should be normalised to [0, 1] but idk how.
-            # Just do abs error?
-            diff_in_masks = test_masks[sample_no] - outputs[sample_no]
+            diff_in_masks = test_masks[sample_no] - predictions[sample_no]
 
             for label_idx in range(len(LABELS)):
                 test_mask_pixels = test_masks[sample_no][label_idx].cpu()
-                reproduced_mask_pixels = outputs[sample_no][label_idx].cpu()
+                reproduced_mask_pixels = predictions[sample_no][label_idx].cpu()
                 diff_in_mask_pixels = diff_in_masks[label_idx].cpu()
 
                 axes_main[0, label_idx].set_title(LABELS[label_idx], fontsize=12)
@@ -89,9 +86,9 @@ def run_inference(model, loader, device, test_batch_size):
             axes_cum_diff[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
 
             # Cumulative mask
-            cum_mask = torch.zeros_like(outputs[sample_no][0]).to(device)
-            for class_idx in range(outputs[sample_no].shape[0]):
-                class_mask = outputs[sample_no][class_idx]
+            cum_mask = torch.zeros_like(predictions[sample_no][0]).to(device)
+            for class_idx in range(predictions[sample_no].shape[0]):
+                class_mask = predictions[sample_no][class_idx]
 
                 # Ceiling the class
                 class_mask_ceil = torch.where(
@@ -108,13 +105,13 @@ def run_inference(model, loader, device, test_batch_size):
 
     fig_cum_diff.suptitle("Cumulative Difference Between GND Truth and Reconstructed Masks", fontsize=18)
     out_path = output_dir / f"cum_diff_in_masks_{len(loader)}_batches.png"
-    fig_cum_diff.savefig(out_path)
+    #fig_cum_diff.savefig(out_path)
 
     fig_cum.suptitle("MRI Masks Segmented", fontsize=18)
     out_path = output_dir / f"cum_masks_{len(loader)}_batches.png"
-    fig_cum.savefig(out_path)
+    #fig_cum.savefig(out_path)
 
-    plt.show()
+    #plt.show()
 
     unet_report_test_temp = unet_report_test_temp + f"--- Mean DSC per class across test set ---\n"
     dcs_scores = torch.mean(dcs_scores, dim=0)
@@ -135,7 +132,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
 model = ImprovedUnet(in_channels=1, out_channels=len(LABELS), dropout_p=0.24)
 model = model.to(device)
 
-model_path = r"audit_out/unet_improved_tce(1).pth"
+model_path = r"audit_out/unet_improved_dsc.pth"
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.eval()
 

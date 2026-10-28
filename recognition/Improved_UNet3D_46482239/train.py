@@ -3,6 +3,9 @@ import numpy as np
 import torch
 import random
 import time
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from pathlib import Path
 from torchvision import transforms
 from dataset import LABELS, get_train_loader, get_validate_loader
 from modules import UNet, DiceLoss, dsc_per_class, AsymmetricUnifiedFocalLoss, DiceCELoss, TverskyCELoss, ImprovedUnet
@@ -21,16 +24,17 @@ validate_dataloader = get_validate_loader()
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
-dropout = 0.18
+dropout = 0.20
 model = ImprovedUnet(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 44
-learning_rate = 0.00022
+num_epochs = 36
+learning_rate = 0.001
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-criterion = TverskyCELoss(a=0.26, b=0.74, w=0.5)#DiceCELoss(w=0.5) # AsymmetricUnifiedFocalLoss() #DiceLoss()
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.66, patience=3)
+criterion = DiceLoss()#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
 
-from pathlib import Path
+
 output_dir = Path("audit_out/")
 output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -45,7 +49,7 @@ unet_report_path = output_dir / r"unet_report.txt"
 
 print("Training...")
 start_time = time.time()
-training_times = list()
+training_times = [0.0]
 training_subtime = start_time
 for epoch in range(num_epochs):
     # ======== Training Segment ========
@@ -81,6 +85,7 @@ for epoch in range(num_epochs):
 
     training_subtime = time.time() - training_subtime
     training_times.append(training_subtime)
+
     # ======== Validate Segment ========
     model.eval()
     with torch.no_grad():
@@ -102,31 +107,31 @@ for epoch in range(num_epochs):
         unet_report_validation_temp = unet_report_validation_temp + f"\n"
 
     avg_validation_loss = validation_loss / len(validate_dataloader)
+    scheduler.step(avg_validation_loss)
     val_losses.append(avg_validation_loss)
     val_accuracy_scores.append(1 - avg_validation_loss)
     out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}\tTime: {training_subtime:.3f}s"
-    print(out_str)
     training_subtime = time.time() - training_subtime
+    print(out_str)
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-outpath = output_dir / f"unet_dscce.pth"
+
+outpath = output_dir / f"unet_improved_dsc.pth"
 torch.save(model.state_dict(), outpath)
 print(f"Saved checkpoint to {outpath}")
 print("")
 
 # Plot training loss vs validation loss
 fig, ax1 = plt.subplots(figsize=(700, 700, "px"))
-ax1.plot(losses, color='tab:red', label='Loss')
+ax1.plot(losses, color='tab:red', label='Training Loss')
 ax1.plot(val_losses, color='tab:orange', label='Validation Loss')
 ax1.set_xlabel('Epoch')
 ax1.set_ylabel('Loss', color='tab:red')
 ax1.tick_params(axis='y', labelcolor='tab:red')
 
 ax2 = ax1.twinx()
-ax2.plot(accuracy_scores, color='tab:blue', label='Accuracy')
-ax2.plot(val_accuracy_scores, color='tab:green', label='Validation Accuracy')
-ax2.set_ylabel('Accuracy', color='tab:blue')
+ax2.plot(accuracy_scores, color='tab:blue', label='Training DSC Score')
+ax2.plot(val_accuracy_scores, color='tab:green', label='Validation DSC Score')
+ax2.set_ylabel('DSC Score', color='tab:blue')
 ax2.tick_params(axis='y', labelcolor='tab:blue')
 fig.legend(loc="lower left")
 
