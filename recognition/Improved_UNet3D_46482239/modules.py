@@ -250,7 +250,7 @@ class DiceCELoss(nn.Module):
     def forward(self, predictions, targets):
         targets = targets.float()
 
-        # 1. Multi-class Cross-Entropy using Softmax probabilities
+        # Multi-class Cross-Entropy using Softmax probabilities
         # Using 1e-7 instead of 1e-3 prevents artificial penalty capping
         eps = 1e-7
         ce_map = (-1.0 * targets * torch.log(predictions.clamp(min=eps))).sum(dim=1)
@@ -312,17 +312,13 @@ def dsc_per_class(predictions: Tensor, targets: Tensor, smooth: float | int =1e-
     :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
     :param targets: Ground truth [B, K, H, W] (values in {0, 1})
     :param smooth: Prevent division by zero
-    :return: Tensor of shape [K] with the Dice score for each class averaged over the batch
+    :return: Tensor of shape [B, K] with the Dice score for each class averaged over the batch
     """
-    B, K = predictions.shape[:2]
-    predictions = predictions.reshape(B, K, -1)     # Becomes [B, K, HxW]
-    targets = targets.reshape(B, K, -1).float()
-
-    intersection = (predictions * targets).sum(dim=2)
-    denominator = predictions.sum(dim=2) + targets.sum(dim=2)
+    predictions, targets, intersection = _counts(predictions, targets)
+    denominator = predictions + targets
     dice = (2 * intersection + smooth) / (denominator + smooth)     # [B, K]
 
-    return dice.mean(dim=0)     # [K] -- one score per class
+    return dice
 
 
 @torch.no_grad()
@@ -332,15 +328,44 @@ def iou_per_class(predictions: Tensor, targets: Tensor, smooth: float | int =1e-
     :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
     :param targets: Ground truth [B, K, H, W] (values in {0, 1})
     :param smooth: Prevent division by zero
-    :return: Tensor of shape [K] with the IoU score for each class averaged over the batch
+    :return: Tensor of shape [B, K] with the IoU score for each class averaged over the batch
+    """
+    predictions, targets, intersection = _counts(predictions, targets)
+    union = predictions + targets - intersection
+    dice = (intersection + smooth) / (union + smooth)   # [B, K]
+
+    return dice
+
+
+@torch.no_grad()
+def fpr_per_class(predictions: Tensor, targets: Tensor):
+    """
+    Used during inference.
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
+    :return: False positive rates (FPR) per class
+    """
+    B, K = predictions.shape[:2]
+    tp = targets > 0
+    fp = (predictions > 0).float() * (~tp).float()
+    #fp = (torch.clamp((predictions > 0).float() - tp.float(), 0.0))
+    n_count = (~tp).float().reshape(B, K, -1).sum(dim=2)
+    fp_count = fp.reshape(B, K, -1).sum(dim=2)
+
+    return torch.div(fp_count, n_count)
+
+
+@torch.no_grad()
+def _counts(predictions: Tensor, targets: Tensor):
+    """
+    Reshapes and sums predictions and targets, and calculates intersection.
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
+    :return: summed predictions, summed targets, intersection
     """
     B, K = predictions.shape[:2]
     predictions = predictions.reshape(B, K, -1)     # Becomes [B, K, HxW]
     targets = targets.reshape(B, K, -1).float()
-
     intersection = (predictions * targets).sum(dim=2)
-    union = predictions.sum(dim=2) + targets.sum(dim=2) - intersection
-    dice = (intersection + smooth) / (union + smooth)   # [B, K]
 
-    return dice.mean(dim=0)     # [K] -- one score per class
-
+    return predictions.sum(dim=2), targets.sum(dim=2), intersection

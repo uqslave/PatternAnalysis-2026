@@ -19,7 +19,45 @@ import argparse
 from torch.utils.data import DataLoader
 
 from dataset import LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D
-from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D
+from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class
+
+
+@torch.no_grad()
+def summarise_scores(predictions, targets):
+    dsc_scores = torch.Tensor().to(device)
+
+    predictions = torch.argmax(predictions, dim=1)  # Becomes [B, H, W]
+    predictions = F.one_hot(predictions, num_classes=len(LABELS)).permute(0, 3, 1, 2).float()  # Back to [B, K, H, W]
+
+    # Dice +empty slices
+    dsc_wempty = dsc_per_class(predictions, targets)  # [B, K]
+
+    # Dice present slices
+    B, K = predictions.shape[:2]
+    tp = targets > 0
+    # 1. Find where each class is present in each batch item -> shape: [B, K]
+    has_class = tp.reshape(B, K, -1).any(dim=2)
+    # 2. Expand `has_class` back to match the spatial shape [B, K, H, W]
+    # (Assuming H, W are dimensions 2 and 3)
+    spatial_dims = predictions.shape[2:]
+    mask_expanded = has_class.view(B, K, *([1] * len(spatial_dims)))
+    # 3. Filter predictions: zero out everything where the class isn't present
+    filtered_predictions = predictions * mask_expanded.float()
+    wtf = targets > 0
+
+    # Dice pooled slices
+    huh = predictions[:, 5, :, :].unsqueeze(dim=1)
+    umm = targets[:, 5, :, :].unsqueeze(dim=1)
+    dsc_pooled = dsc_per_class(huh, umm)
+
+    # IoU pooled
+    iou = iou_per_class(huh, umm)
+
+    # Empty FP rate
+    fpr = fpr_per_class(predictions, targets)
+
+    return dsc_wempty, dsc_pooled, iou, fpr
+
 
 
 @torch.no_grad()
@@ -37,7 +75,7 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
     fig_cum, axes_cum = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     fig_cum_diff, axes_cum_diff = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     four_colour_cmap = mpl.colormaps['jet'].resampled(len(LABELS))
-    dcs_scores = torch.Tensor().to(device)
+    dsc_scores1, dsc_scores2, dsc_scores3, dsc_scores4 = torch.Tensor().to(device),torch.Tensor().to(device),torch.Tensor().to(device),torch.Tensor().to(device)
     unet_report_test_temp = ""
 
 
@@ -47,11 +85,16 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
         test_masks = test_masks.to(device)
 
         predictions = model(test_images)
-        predictions = torch.argmax(predictions, dim=1)  # Becomes [B, H, W]
-        predictions = F.one_hot(predictions, num_classes=len(LABELS)).permute(0, 3, 1, 2).float()  # Back to [B, K, H, W]
-        scores = dsc_per_class(predictions, test_masks)
-        dcs_scores = torch.cat([dcs_scores, scores.reshape(-1, len(LABELS))], 0)
 
+        scores, dsc_pooled, iou, fpr = summarise_scores(predictions, test_masks)
+
+        dsc_scores1 = torch.cat([dsc_scores1, scores], 0)
+        dsc_scores2 = torch.cat([dsc_scores2, dsc_pooled], 0)
+        dsc_scores3 = torch.cat([dsc_scores3, iou], 0)
+        dsc_scores4 = torch.cat([dsc_scores4, fpr], 0)
+
+        # scores = dsc_per_class(predictions, test_masks)  # [B, K]
+        scores = torch.mean(scores, dim=0)
         print(f"Test batch {bidx + 1}/{len(loader)} DSC Scores: ")
         for name, s in zip(LABELS, scores):
             print(f"{name}: {s:.4f}")
@@ -131,8 +174,12 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
     plt.show()
 
     unet_report_test_temp = unet_report_test_temp + f"--- Mean DSC per class across test set ---\n"
-    dcs_scores = torch.mean(dcs_scores, dim=0)
-    for label, score in zip(LABELS, dcs_scores):
+    dsc_scores1 = torch.mean(dsc_scores1, dim=0)
+    dsc_scores2 = torch.mean(dsc_scores2, dim=0)
+    dsc_scores3 = torch.mean(dsc_scores3, dim=0)
+    dsc_scores4 = torch.mean(dsc_scores4, dim=0)
+    print(dsc_scores1, "\n", dsc_scores2, "\n", dsc_scores3, "\n", dsc_scores4)
+    for label, score in zip(LABELS, dsc_scores1):
         unet_report_test_temp = unet_report_test_temp + f"{label}: {score:.3f}\n"
     unet_report_test_temp = unet_report_test_temp + f"\n"
 
