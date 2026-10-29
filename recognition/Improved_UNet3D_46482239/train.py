@@ -7,8 +7,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from pathlib import Path
 from torchvision import transforms
-from dataset import LABELS, get_dataloader_2d
-from modules import UNet, dsc_per_class, DiceCELoss, TverskyCELoss, ImprovedUnet
+from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
+from modules import UNet, dsc_per_class, DiceCELoss, TverskyCELoss, ImprovedUnet, ImprovedUnet3D
 
 # Set random seeds for reproducibility
 torch.manual_seed(67)
@@ -19,13 +19,13 @@ torch.cuda.manual_seed(67)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device.type)
 
-train_dataloader = get_dataloader_2d("train")
-validate_dataloader = get_dataloader_2d("validate")
+train_dataloader = get_dataloader_3d("train")
+validate_dataloader = get_dataloader_3d("validate")
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
 dropout = 0.23
-model = ImprovedUnet(in_channels, out_channels, dropout)
+model = ImprovedUnet3D(in_channels, out_channels, dropout)
 model = model.to(device)
 
 num_epochs = 40
@@ -33,7 +33,7 @@ learning_rate = 0.001
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=0.00007)
 criterion = DiceCELoss(w=0.5)#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
-
+scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
 output_dir = Path("audit_out/")
 output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,13 +61,13 @@ for epoch in range(num_epochs):
     for batch_idx, (images, masks) in enumerate(train_dataloader):
         images = images.to(device)
         masks = masks.to(device)
-
+        with torch.autocast("cuda", dtype=torch.float16):
+            outputs = model(images)
+            loss = criterion(outputs, masks)
+        scaler.scale(loss).backward()
+        scaler.step(optimiser)
+        scaler.update()
         optimiser.zero_grad()
-        outputs = model(images)
-
-        loss = criterion(outputs, masks)
-        loss.backward()
-        optimiser.step()
 
         losses_per_batch = torch.cat([losses_per_batch, dsc_per_class(outputs, masks).reshape(-1, len(LABELS))])
         epoch_loss = epoch_loss + loss.item()
@@ -114,7 +114,7 @@ for epoch in range(num_epochs):
     print(out_str)
 
 
-outpath = output_dir / f"unet_improved_dsc.pth"
+outpath = output_dir / f"unet_improved_3d.pth"
 torch.save(model.state_dict(), outpath)
 print(f"Saved checkpoint to {outpath}")
 print("")
@@ -136,7 +136,7 @@ fig.legend(loc="lower left")
 
 plt.title("UNET Segmentation Training Curve")
 fig.tight_layout()
-outpath = output_dir / r"UNET Segmentation Training Curve.png"
+outpath = output_dir / r"3D UNET Segmentation Training Curve.png"
 fig.savefig(outpath)
 plt.show()
 

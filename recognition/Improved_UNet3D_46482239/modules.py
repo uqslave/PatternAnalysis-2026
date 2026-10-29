@@ -3,6 +3,95 @@ import torch.nn.functional as F
 from torch import nn
 
 
+class ResidualConvBlock3D(nn.Module):
+    """
+    Residual convolution block.
+    """
+
+    def __init__(self, in_channels, out_channels, dropout_p=0.2):
+        super().__init__()
+        self.block1 = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(out_channels),
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout3d(dropout_p)
+        )
+        self.block2_1 = nn.Sequential(
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.InstanceNorm3d(out_channels),
+        )
+        self.block2_2 = nn.Sequential(
+            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.Dropout3d(dropout_p)
+        )
+
+        # Shortcut connection to match dimensions if in_channels != out_channels
+        self.shortcut = nn.Sequential()
+        if in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv3d(in_channels, out_channels, kernel_size=1, bias=False),
+                nn.InstanceNorm3d(out_channels)
+            )
+
+    def forward(self, x):
+        residual = self.shortcut(x)
+        out = self.block1(x)
+        out = self.block2_1(out)
+        out = out + residual    # Add residual shortcut before final activation
+        out = self.block2_2(out)
+        return out
+
+
+class ImprovedUnet3D(nn.Module):
+    """
+    Improved UNet model class using residual blocks
+    """
+    def __init__(self, in_channels, out_channels, dropout_p=0.2):
+        super().__init__()
+
+        # Encoder (downsampling) using Residual Blocks
+        self.encoder1 = ResidualConvBlock3D(in_channels, 32, dropout_p=dropout_p)
+        self.encoder2 = ResidualConvBlock3D(32, 64, dropout_p=dropout_p)
+        self.encoder3 = ResidualConvBlock3D(64, 128, dropout_p=dropout_p)
+        self.encoder4 = ResidualConvBlock3D(128, 256, dropout_p=dropout_p)
+
+        # Decoder (upsampling) using Residual Blocks
+        self.decoder4 = ResidualConvBlock3D(256 + 128, 128, dropout_p=dropout_p)
+        self.decoder3 = ResidualConvBlock3D(128 + 64, 64, dropout_p=dropout_p)
+        self.decoder2 = ResidualConvBlock3D(64 + 32, 32, dropout_p=dropout_p)
+        self.decoder1 = nn.Conv3d(32, out_channels, kernel_size=1)
+
+        self.pool = nn.MaxPool3d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode="trilinear", align_corners=True)
+        self.act = nn.Softmax(dim = 1)
+
+        # Deep supervision: sum predictions from multiple scales
+        self.seg4 = nn.Conv3d(128, out_channels, kernel_size=1)     # d4: 1/4 resolution
+        self.seg3 = nn.Conv3d(64, out_channels, kernel_size=1)      # d3: 1/2 resolution
+
+    def forward(self, x):
+        # Encoder
+        e1 = self.encoder1(x)
+        e2 = self.encoder2(self.pool(e1))
+        e3 = self.encoder3(self.pool(e2))
+        e4 = self.encoder4(self.pool(e3))
+
+        # Decoder with skip connections
+        d4 = self.decoder4(torch.cat([self.upsample(e4), e3], dim=1))
+        d3 = self.decoder3(torch.cat([self.upsample(d4), e2], dim=1))
+        d2 = self.decoder2(torch.cat([self.upsample(d3), e1], dim=1))
+
+        # Deep supervision
+        s = self.seg4(d4)  # 1/4 res
+        s = self.upsample(s) + self.seg3(d3)  # 1/2 res
+        out = self.upsample(s) + self.decoder1(d2)  # full res
+
+        # Apply activation to final output
+        out = self.act(out)
+
+        return out
+
+
 class ResidualConvBlock(nn.Module):
     """
     Residual convolution block.
