@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 
 class ResidualConvBlock3D(nn.Module):
@@ -239,8 +239,8 @@ class DiceCELoss(nn.Module):
     """
     Dice + cross-entropy.
     loss = w * Dice loss + (1 - w) * CE
-    probs : softmax output [B, K, H, W]
-    onehot: ground truth   [B, K, H, W]
+    predictions : softmax output [B, K, H, W]
+    targets: ground truth one-hot encoding   [B, K, H, W]
     """
     def __init__(self, w: float = 0.5, smooth: float = 1.0):
         super().__init__()
@@ -249,22 +249,30 @@ class DiceCELoss(nn.Module):
 
     def forward(self, predictions, targets):
         targets = targets.float()
-        ce = -(targets * torch.log(predictions.clamp(min=1e-3))).sum(dim=1).mean()   # per-pixel CE, averaged over B, H, W
-        return self.w * self.dice(predictions, targets) + (1 - self.w) * ce
+
+        # 1. Multi-class Cross-Entropy using Softmax probabilities
+        # Using 1e-7 instead of 1e-3 prevents artificial penalty capping
+        eps = 1e-7
+        ce_map = (-1.0 * targets * torch.log(predictions.clamp(min=eps))).sum(dim=1)
+
+        ce_loss = ce_map.mean()
+        dice_loss = self.dice(predictions, targets)
+
+        return (self.w * dice_loss) + ((1.0 - self.w) * ce_loss)
 
 
 class DiceLoss(nn.Module):
     """
     Dice Loss (DSC) class.
     """
-    def __init__(self, smooth: float= 0.5):
+    def __init__(self, smooth: float | int= 0.5):
         """
         :param smooth: Prevent division by zero
         """
         super(DiceLoss, self).__init__()
         self.smooth = smooth
 
-    def forward(self, predictions, targets):
+    def forward(self, predictions: Tensor, targets: Tensor):
         """
         :param predictions: Sigmoid output from model [B, C, H, W] (values in [0, 1])
         :param targets: Ground truth [B, C, H, W] (values in {0, 1})
@@ -286,34 +294,53 @@ class DiceLoss(nn.Module):
         # Flattening the prediction and target tensors into single array for each batch and class/channel
         # Spatial input irrelevant since DSC is counting how many pixels overlap with correct result (ground truth)
         B, K = predictions.shape[:2]
-        predictions = predictions.reshape(B, K, -1) # Reshapes from [B, K, H, W] to [B, K, HxW]
+        predictions = predictions.reshape(B, K, -1) # Reshapes from [B, K, H, W(, D)] to [B, K, HxW(xD)]
         targets = targets.reshape(B, K, -1).float()
 
-        # Calculate intersection and union
-        intersection = (predictions * targets).sum(dim=2)                           # intersection.shape    [B, K]
-        union = predictions.sum(dim=2) + targets.sum(dim=2)                         # union.shape           [B, K]
-        dice_per_class = (2 * intersection + self.smooth) / (union + self.smooth)   # dsc.shape             [B, K]
+        # Calculate intersection and denominator
+        intersection = (predictions * targets).sum(dim=2)                               # intersection.shape    [B, K]
+        denominator = predictions.sum(dim=2) + targets.sum(dim=2)                       # denominator.shape     [B, K]
+        dice_per_class = (2 * intersection + self.smooth) / (denominator + self.smooth) # dsc.shape             [B, K]
 
         return 1 - dice_per_class.mean()
 
 
 @torch.no_grad()
-def dsc_per_class(predictions, targets, smooth=1e-8):
+def dsc_per_class(predictions: Tensor, targets: Tensor, smooth: float | int =1e-8):
     """
     Used during inference.
-    Returns a tensor of shape [K] with the Dice score for each class, averaged over the batch.
-    :param predictions: Softmax output from model [B, C, H, W] (values in {0, 1})
-    :param targets: Ground truth [B, C, H, W] (values in {0, 1})
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
     :param smooth: Prevent division by zero
-    :return: Dice Score
+    :return: Tensor of shape [K] with the Dice score for each class averaged over the batch
     """
     B, K = predictions.shape[:2]
-    # predictions = (predictions > 0.5).float() # Did argmax before calling this method.
-    predictions = predictions.reshape(B, K, -1) # Becomes [B, K, HxW]
+    predictions = predictions.reshape(B, K, -1)     # Becomes [B, K, HxW]
     targets = targets.reshape(B, K, -1).float()
 
     intersection = (predictions * targets).sum(dim=2)
-    union = predictions.sum(dim=2) + targets.sum(dim=2)
-    dice = (2 * intersection + smooth) / (union + smooth)   # [B, K]
+    denominator = predictions.sum(dim=2) + targets.sum(dim=2)
+    dice = (2 * intersection + smooth) / (denominator + smooth)     # [B, K]
 
-    return dice.mean(dim=0)                                 # [K] -- one score per class
+    return dice.mean(dim=0)     # [K] -- one score per class
+
+
+@torch.no_grad()
+def iou_per_class(predictions: Tensor, targets: Tensor, smooth: float | int =1e-8):
+    """
+    Used during inference.
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
+    :param smooth: Prevent division by zero
+    :return: Tensor of shape [K] with the IoU score for each class averaged over the batch
+    """
+    B, K = predictions.shape[:2]
+    predictions = predictions.reshape(B, K, -1)     # Becomes [B, K, HxW]
+    targets = targets.reshape(B, K, -1).float()
+
+    intersection = (predictions * targets).sum(dim=2)
+    union = predictions.sum(dim=2) + targets.sum(dim=2) - intersection
+    dice = (intersection + smooth) / (union + smooth)   # [B, K]
+
+    return dice.mean(dim=0)     # [K] -- one score per class
+
