@@ -1,11 +1,10 @@
 import torch
-import torch.nn.functional as F
 from torch import nn
 
 
 class ResidualConvBlock3D(nn.Module):
     """
-    Residual convolution block.
+    3D Residual convolution block.
     """
 
     def __init__(self, in_channels, out_channels, dropout_p=0.2):
@@ -44,7 +43,7 @@ class ResidualConvBlock3D(nn.Module):
 
 class ImprovedUnet3D(nn.Module):
     """
-    Improved UNet model class using residual blocks
+    Improved UNet 3D model class using residual blocks
     """
     def __init__(self, in_channels, out_channels, dropout_p=0.2):
         super().__init__()
@@ -94,7 +93,7 @@ class ImprovedUnet3D(nn.Module):
 
 class ResidualConvBlock(nn.Module):
     """
-    Residual convolution block.
+    2D Residual convolution block.
     """
 
     def __init__(self, in_channels, out_channels, dropout_p=0.2):
@@ -181,9 +180,10 @@ class ImprovedUnet(nn.Module):
 
         return out
 
+
 class UNet(nn.Module):
     """
-    UNet model class.
+    Plain UNet model class.
     """
     def __init__(self, in_channels, out_channels, dropout_p=0.2):
         super().__init__()
@@ -235,36 +235,6 @@ class UNet(nn.Module):
         return out
 
 
-class AsymmetricUnifiedFocalLoss(nn.Module):
-    def __init__(self, lam=0.5, delta=0.6, gamma=0.5, common=(0, 1), smooth=0.5):
-        super().__init__()
-        self.lam, self.delta, self.gamma = lam, delta, gamma
-        self.common, self.smooth = list(common), smooth
-
-    def forward(self, probs, onehot):
-        probs = probs.clamp(1e-7, 1 - 1e-7)
-        onehot = onehot.float()
-        K = probs.shape[1]
-        rare = [c for c in range(K) if c not in self.common]
-
-        # --- Cross-entropy side: focal-suppress common classes, plain CE for rare ---
-        ce = -onehot * torch.log(probs)                                   # [B,K,H,W]
-        ce_common = (1 - self.delta) * (1 - probs[:, self.common]) ** self.gamma * ce[:, self.common]
-        ce_rare = self.delta * ce[:, rare]
-        l_focal = torch.cat([ce_common, ce_rare], dim=1).sum(1).mean()
-
-        # --- Tversky side: delta weights false NEGATIVES (delta > 0.5 favours recall) ---
-        tp = (probs * onehot).sum((2, 3))                                 # [B,K]
-        fn = ((1 - probs) * onehot).sum((2, 3))
-        fp = (probs * (1 - onehot)).sum((2, 3))
-        mti = (tp + self.smooth) / (tp + self.delta * fn + (1 - self.delta) * fp + self.smooth)
-        loss = (1 - mti).clamp(min=1e-7)                                  # avoid inf grad at 0 for x**(1-gamma)
-        l_tversky = torch.cat([loss[:, self.common],
-                               loss[:, rare] ** (1 - self.gamma)], dim=1).mean()
-
-        return self.lam * l_focal + (1 - self.lam) * l_tversky
-
-
 class DiceCELoss(nn.Module):
     """
     Dice + cross-entropy.
@@ -282,45 +252,6 @@ class DiceCELoss(nn.Module):
         ce = -(targets * torch.log(predictions.clamp(min=1e-3))).sum(dim=1).mean()   # per-pixel CE, averaged over B, H, W
         return self.w * self.dice(predictions, targets) + (1 - self.w) * ce
 
-
-class TverskyLoss(nn.Module):
-    """
-    Tversky loss: 1 - TP / (TP + a*FP + b*FN), computed per slice and per class, then averaged.
-    a weights false positives, b weights false negatives.
-    a = b = 0.5 is the Dice loss; b > a penalises misses more than false alarms.
-    """
-    def __init__(self, a: float = 0.4, b: float = 0.6, smooth: float = 1):
-        super().__init__()
-        self.a, self.b, self.smooth = a, b, smooth
-
-    def forward(self, probs, onehot):
-        B, K = probs.shape[:2]
-        p = probs.reshape(B, K, -1)
-        t = onehot.reshape(B, K, -1).float()
-
-        tp = (p * t).sum(2)                    # [B, K]
-        fp = (p * (1 - t)).sum(2)
-        fn = ((1 - p) * t).sum(2)
-        tversky = (tp + self.smooth) / (tp + self.a * fp + self.b * fn + self.smooth)
-        return 1 - tversky.mean()
-
-
-class TverskyCELoss(nn.Module):
-    """
-    loss = w * Tversky loss + (1 - w) * cross-entropy
-    probs : softmax output [B, K, H, W]
-    onehot: ground truth   [B, K, H, W]
-    a = b = 0.5 reduces to Dice + CE.
-    """
-    def __init__(self, a: float = 0.4, b: float = 0.6, w: float = 0.5, smooth: float = 0.5):
-        super().__init__()
-        self.tversky = TverskyLoss(a, b, smooth)
-        self.w = w
-
-    def forward(self, probs, onehot):
-        onehot = onehot.float()
-        ce = -(onehot * torch.log(probs.clamp(min=1e-7))).sum(dim=1).mean()
-        return self.w * self.tversky(probs, onehot) + (1 - self.w) * ce
 
 class DiceLoss(nn.Module):
     """
@@ -354,7 +285,7 @@ class DiceLoss(nn.Module):
 
         # Flattening the prediction and target tensors into single array for each batch and class/channel
         # Spatial input irrelevant since DSC is counting how many pixels overlap with correct result (ground truth)
-        B, K, _, _ = predictions_shape
+        B, K = predictions.shape[:2]
         predictions = predictions.reshape(B, K, -1) # Reshapes from [B, K, H, W] to [B, K, HxW]
         targets = targets.reshape(B, K, -1).float()
 
@@ -369,12 +300,17 @@ class DiceLoss(nn.Module):
 @torch.no_grad()
 def dsc_per_class(predictions, targets, smooth=1e-8):
     """
+    Used during inference.
     Returns a tensor of shape [K] with the Dice score for each class, averaged over the batch.
+    :param predictions: Softmax output from model [B, C, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, C, H, W] (values in {0, 1})
+    :param smooth: Prevent division by zero
+    :return: Dice Score
     """
-    B, C, _, _ = predictions.shape
-    predictions = (predictions > 0.5).float()
-    predictions = predictions.reshape(B, C, -1) # Becomes [B, K, HxW]
-    targets = targets.reshape(B, C, -1).float()
+    B, K = predictions.shape[:2]
+    # predictions = (predictions > 0.5).float() # Did argmax before calling this method.
+    predictions = predictions.reshape(B, K, -1) # Becomes [B, K, HxW]
+    targets = targets.reshape(B, K, -1).float()
 
     intersection = (predictions * targets).sum(dim=2)
     union = predictions.sum(dim=2) + targets.sum(dim=2)
