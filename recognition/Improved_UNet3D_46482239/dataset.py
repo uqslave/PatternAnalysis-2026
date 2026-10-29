@@ -38,8 +38,8 @@ BATCH_SIZE_2D = {
 }
 BATCH_SIZE_3D = {
     "train":    3,
-    "validate": 2,
-    "test":     3,
+    "validate": 1,
+    "test":     1,
 }
 SPLIT_PROPS = ( # For 3D scans
     0.74,       # Train
@@ -53,60 +53,72 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
     HipMRI 3D dataset class.
     Patient-level splits to prevent data leakage.
     """
+    PATCH = (   # Each must be divisible by 4 because of the two pooling steps in the model
+        64,     # D
+        128,    # H
+        128,    # W
+    )
+
     def __init__(self, dataset: str, transform=None):
         """
         We must do our own patient split
-        :param dataset:
-        :param transform:
+        :param dataset: train, validate, or test
+        :param transform: transforms
         """
+        self.random_crop = dataset == "train"
         self.patient_ids = SPLIT[dataset]
 
-        self.raw = list()
-        self.mask = list()
-        raw_scans, mask_scans = self.load_3d()
-        for _ in self.patient_ids:
-            for index in range(len(raw_scans)):
-                self.raw.append(raw_scans[index])
-                self.mask.append(mask_scans[index])
+        self.raw_files = list()
+        self.mask_files = list()
+        for patient_id in self.patient_ids:
+            raw_file = sorted(glob.glob(DATASET_3D_TYPES["raw"] + rf"{patient_id}*.nii*"))
+            mask_file = sorted(glob.glob(DATASET_3D_TYPES["mask"] + rf"{patient_id}*.nii*"))
+            self.raw_files.extend(raw_file)
+            self.mask_files.extend(mask_file)
 
-        self.label_values = (i for i in range(6))   # 0 - Background,
+        self.label_values = range(6)
+        # 0 - Background,
         # 1 - Body outline,
         # 2 - Bone,
         # 3 - Bladder,
         # 4 - Rectum,
         # 5 - Prostate
-
         self.transform = transform
 
     def __len__(self):
-        return len(self.raw)
+        return len(self.raw_files)
 
     def __getitem__(self, index: int):
+        raw_scan, mask_scan = self._load_3d(index)
+
         # Better to use from_numpy() here since the masks are assigned an integer in sequential order.
         # for Conv3d, shapes per batch should be (B, 1, D, H, W) / (B, D, H, W) or similar
-        raw = torch.from_numpy(self.raw[index]).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
-        mask = torch.from_numpy(self.mask[index]).permute(3, 2, 0, 1)           # Becomes [K, D, H, W]
-        mask = mask.float()     # Can leave as float32 for now. Consider mixed precision later.
+        raw = torch.from_numpy(raw_scan[0]).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
+        mask = torch.from_numpy(mask_scan[0]).permute(3, 2, 0, 1).float()   # Becomes [K, D, H, W]
 
+        if self.random_crop:  # True for train only
+            _, D, H, W = raw.shape
+            d = random.randint(0, D - self.PATCH[0])
+            h = random.randint(0, H - self.PATCH[1])
+            w = random.randint(0, W - self.PATCH[2])
+            sl = (
+                slice(None),
+                slice(d, d + self.PATCH[0]),
+                slice(h, h + self.PATCH[1]),
+                slice(w, w + self.PATCH[2])
+            )
+            raw, mask = raw[sl], mask[sl]
         return raw, mask
 
-    def load_3d(self) -> tuple:
+    def _load_3d(self, index: int) -> tuple:
         """
-        Loads the 3D scans of this dataset.
-        :return: 3D scans of this dataset
+        Loads the 3D scans of this file.
+        :return: 3D scans of this file
         """
-        image_names = list()
-        mask_names = list()
-        for patient_id in self.patient_ids:
-            image_names.extend(glob.glob(DATASET_3D_TYPES["raw"] + rf"{patient_id}*.nii*"))
-            mask_names.extend(glob.glob(DATASET_3D_TYPES["mask"] + rf"{patient_id}*.nii*"))
-        sorted(image_names)
-        sorted(mask_names)
-        # sorted(glob.glob(DATASET_3D_TYPES["raw"] + r"*.nii*"))
-        # sorted(glob.glob(DATASET_3D_TYPES["mask"] + r"*.nii*"))
-
-        raw = load_data_3D(image_names, normImage=True)  # [N, H, W, D] float32
-        mask = load_data_3D(mask_names, categorical=True, dtype=np.uint8)  # [N, H, W, D] integer labels
+        raw_path = self.raw_files[index]
+        mask_path = self.mask_files[index]
+        raw = load_data_3D([raw_path], normImage=True)                      # [N, H, W, D] float32
+        mask = load_data_3D([mask_path], categorical=True, dtype=np.uint8)  # [N, H, W, D] integer labels
 
         return raw, mask
 
@@ -208,7 +220,7 @@ def to_channels(arr: np.ndarray, dtype=np.uint8) -> np.ndarray:
 def load_data_3D(imageNames, normImage=False, categorical=False,
                  dtype=np.float32, getAffines=False, orient=False,
                  early_stop=False):
-    '''
+    """
     Load medical image data from names, cases list provided into a list for
     each.
 
@@ -222,7 +234,7 @@ def load_data_3D(imageNames, normImage=False, categorical=False,
     is labels
     early_stop : Stop loading pre-maturely? Leaves arrays mostly empty, for
     quick loading and testing scripts.
-    '''
+    """
     affines = []
 
     interp = 'linear'
@@ -331,7 +343,7 @@ def load_data_2D(imageNames, target_shape=(256, 128), normImage=False,
         return images
 
 # ======================================================================================================================
-def split3D(image_names: list, mask_names: list, seed: int | str = 69) -> tuple[tuple[str]]:
+def split3D(image_names: list, mask_names: list, seed: int | str = 69) -> tuple[set[str]]:
     """
     Perform patient-level split for the 3D HipMRI scans by employing the subset-sum-problem
     :param image_names: The file names (and dir) of the raw scans
@@ -414,7 +426,7 @@ def get_dataloader_3d(dataset: str) -> DataLoader:
     shuffle = False
     if dataset == "train" or dataset == "test":
         shuffle = True
-    return DataLoader(mri_dataset, batch_size = BATCH_SIZE_3D[dataset], shuffle=shuffle)
+    return DataLoader(mri_dataset, batch_size = BATCH_SIZE_3D[dataset], shuffle=shuffle, persistent_workers=True)
 
 # Splits via patient id
 images = sorted(glob.glob(os.path.join(DATASET_3D_TYPES["raw"], "*.nii*")))
@@ -430,8 +442,8 @@ SPLIT = {
 if __name__ == "__main__":
     # Test script for sanity checks
     # Try loading in data
-    train_dataset = HipMRI3DDataset("train")
-    train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+    train_dataset = HipMRI3DDataset("validate")
+    train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
 
     print(len(train_dataloader))
     for i, x in enumerate(train_dataloader):
