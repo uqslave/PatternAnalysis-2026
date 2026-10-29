@@ -278,7 +278,7 @@ class DiceLoss(nn.Module):
 
 
 @torch.no_grad()
-def dsc_per_class(predictions, targets, smooth=1.):
+def dsc_per_class(predictions, targets, smooth=1e-8):
     """
     Returns a tensor of shape [K] with the Dice score for each class, averaged over the batch.
     """

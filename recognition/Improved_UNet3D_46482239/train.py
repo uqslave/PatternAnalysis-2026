@@ -28,10 +28,10 @@ dropout = 0.23
 model = ImprovedUnet(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 30
-learning_rate = 0.002
+num_epochs = 40
+learning_rate = 0.001
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimiser, factor=0.26, patience=2)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=0.00007)
 criterion = DiceCELoss(w=0.5)#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
 
 
@@ -105,9 +105,8 @@ for epoch in range(num_epochs):
         for label_idx, label in enumerate(LABELS):
             unet_report_validation_temp = unet_report_validation_temp + f"{label}: {losses_per_batch_temp[label_idx]:.3f}\n"
         unet_report_validation_temp = unet_report_validation_temp + f"\n"
-
+    scheduler.step()
     avg_validation_loss = validation_loss / len(validate_dataloader)
-    scheduler.step(avg_validation_loss)
     val_losses.append(avg_validation_loss)
     val_accuracy_scores.append(1 - avg_validation_loss)
     out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}\tTime: {training_subtime:.3f}s"
