@@ -1,188 +1,268 @@
-# 3D Improved U-Net for Prostate MRI Segmentation (HipMRI)
+# 3D Improved U-Net for Prostate Segmentation on HipMRI
 
-<!--
-HOW TO USE THIS TEMPLATE
-- Replace every [PLACEHOLDER]. Delete the <!-- guidance --> comments before submitting.
-- Marking (Section 5.3): working principles (5), usage + comments (3), GitHub markdown formatting (2).
-- Fill sections as you go (commit the README progressively; it also helps the commit log).
-- Rename the title if you end at Normal tier (e.g. "3D U-Net ...").
--->
+**Student:** <Name> (<Student ID>)  
+**Course:** COMP3710 Pattern Analysis, 2026  
+**Project:** Segmentation (HipMRI) — 3D Improved U-Net [Hard Difficulty]  
+**Folder:** `recognition/Improved_UNet_<studentID>/`
 
-**Author:** [Your name], [student ID]
-**Course:** COMP3710 / COMP7710 Pattern Recognition, The University of Queensland
-**Project:** Segmentation, [3D Improved U-Net (Hard) / 3D U-Net (Normal)] on downsampled HipMRI 3D data
-**Folder:** `recognition/[Improved_UNet3D_sSTUDENTID]/`
+> Replace every `<...>` placeholder. Delete these instruction blockquotes before submitting.
+
+---
+
+## Table of Contents
+1. [Overview](#1-overview)
+2. [Feasibility Review](#2-feasibility-review)
+3. [How the Algorithm Works](#3-how-the-algorithm-works)
+4. [Data and Preprocessing](#4-data-and-preprocessing)
+5. [Setup and Reproducibility](#5-setup-and-reproducibility)
+6. [Usage](#6-usage)
+7. [Results](#7-results)
+8. [Investigation of the Open Research Dilemma](#8-investigation-of-the-open-research-dilemma)
+9. [Limitations and Future Work](#9-limitations-and-future-work)
+10. [Artificial Intelligence Usage Disclosure](#10-artificial-intelligence-usage-disclosure)
+11. [References](#11-references)
 
 ---
 
 ## 1. Overview
 
-### 1.1 Problem
-<!-- ~1 paragraph: what is being segmented and why it matters. Prostate radiotherapy planning, millimetre-level
-contouring, organs at risk, class imbalance (prostate < 2% of the scan). State the dataset (38 patients, 211 3D volumes)
-and the labels (body, bone, bladder, rectum, prostate; confirm exact label values from your data audit). -->
+> About one paragraph: the problem, why it matters clinically, what your model does.
 
-[PLACEHOLDER]
+Prostate radiotherapy planning requires millimetre-level delineation of the prostate while sparing nearby organs at risk (bladder, rectum, femoral heads). This project implements a **3D Improved U-Net** [2] that segments the <body outline, bone, bladder, rectum, prostate> from pelvic MRI volumes in the HipMRI study. It is benchmarked against a <2D U-Net> baseline to investigate whether volumetric context removes boundary errors at the prostate base and apex.
 
-### 1.2 How the algorithm works
-<!-- ~1 paragraph: encoder-decoder with skip connections; residual context modules; instance norm + LeakyReLU;
-strided-conv downsampling; deep supervision heads; loss function (soft Dice); one-hot output. Cite Isensee et al. [2]. -->
-
-[PLACEHOLDER]
-
-### 1.3 Figure
-<!-- Architecture diagram OR an example prediction overlay. Commit the image file (small!) and link it. -->
-
-![Architecture / example prediction](images/[figure_name].png)
+![Headline figure](images/headline_figure.png)
+*Figure 1: <Caption — e.g. input, ground truth and prediction overlay.>*
 
 ---
 
-## 2. Feasibility Review (Section 3 of the task sheet)
+## 2. Feasibility Review
 
-<!-- One page. Must address the open engineering dilemma (spatial context vs clinical boundary utility). -->
+> Paste your one-page review from the midpoint check-off. Keep all four parts.
 
-### 2.1 User need, scope and acceptance criteria
-- **Intended user / purpose:** [e.g. radiation oncologist reviewing auto-drafted contours]
-- **Acceptance criteria (3-5, testable, include one resource constraint):**
-  1. [Test Dice >= 0.7 on the held-out test patients]
-  2. [Per-slice Dice reported for base / mid / apex regions]
-  3. [3D model compared against 2D U-Net baseline on identical test patients]
-  4. [Peak training VRAM <= X GiB / inference time <= Y s per volume]
+### 2.1 User Need, Scope and Acceptance Criteria
+- **Intended user:** <e.g. radiation oncologist reviewing draft contours>
+- **Purpose:** <annotation assistant that proposes contours>
+- **Acceptance criteria (3–5, testable):**
+  1. Prostate Dice ≥ <0.70> on the held-out test set.
+  2. <Prostate Dice at base/apex slices ≥ X, or boundary criterion>.
+  3. Peak GPU VRAM ≤ <X GB> during training.
+  4. Inference time ≤ <X s> per volume.
 
-### 2.2 Model choice and course concepts
-[Dataset configuration (downsampled HipMRI 3D), architecture, difficulty band, links to lecture concepts and references.]
+### 2.2 Model Choice and Course Concepts
+<Dataset configuration, architecture, difficulty band, and how course concepts and literature support the choices.>
 
-### 2.3 Preliminary feasibility evidence
-[Data audit results, baseline smoke test, measured VRAM / parameter count.]
+### 2.3 Preliminary Feasibility Evidence
+<Data audit (counts, shapes, class balance), baseline smoke test, measured VRAM estimate.>
 
-### 2.4 Risks, budget and fallback
-- **Risks:** [3D memory limits, class imbalance, slow convergence]
-- **Compute budget:** [GPU hours on Rangpur]
-- **Next experiment:** [...]
-- **Fallback:** [Submit 3D U-Net (Normal tier) if the Improved U-Net fails to converge by Day 6 decision point]
+### 2.4 Risks, Budget and Fallback
+| Risk                       | Mitigation                                            |
+|----------------------------|-------------------------------------------------------|
+| <GPU memory limits for 3D> | <Downsample / patch-based training / mixed precision> |
+| <Severe class imbalance>   | <Dice-based loss>                                     |
+
+- **Compute budget:** <e.g. N GPU-hours on Rangpur>
+- **Next experiment:** <...>
+- **Fallback:** <e.g. 3D U-Net, or 2D Improved U-Net>
 
 ---
 
-## 3. Repository Structure
+## 3. How the Algorithm Works
 
+> Explain the working principles (this is worth 5 marks). Aim for clarity over length.
+
+### 3.1 U-Net Backbone
+<Encoder–decoder, skip connections, why they preserve spatial detail.>
+
+### 3.2 Improvements over the Standard U-Net [2]
+| Component                           | What it does                                                         | Why it helps here         |
+|-------------------------------------|----------------------------------------------------------------------|---------------------------|
+| Residual context modules            | <...>                                                                | <...>                     |
+| Localisation modules                | <...>                                                                | <...>                     |
+| Deep supervision                    | <Segmentation maps at multiple decoder levels, upsampled and summed> | <...>                     |
+| Instance normalisation / leaky ReLU | <...>                                                                | <Small batch sizes in 3D> |
+
+### 3.3 3D vs 2D Convolutions
+<Inter-slice context vs memory cost. Include a kernel/feature-map size comparison if useful.>
+
+### 3.4 Loss Function
+<Equation and justification, e.g. the soft Dice loss:>
+
+$$\mathcal{L}_{Dice} = 1 - \frac{2\sum_i p_i g_i + \epsilon}{\sum_i p_i + \sum_i g_i + \epsilon}$$
+
+![Architecture diagram](images/architecture.png)
+*Figure 2: <Architecture of the 3D Improved U-Net.>*
+
+---
+
+## 4. Data and Preprocessing
+
+### 4.1 Dataset
+- **Source:** HipMRI Study (`/home/groups/comp3710/HipMRI_Study_open`) — <38 patients, 211 volumes>
+- **Labels:** <body outline, bone, bladder, rectum, prostate>
+- **Input shape (after downsampling):** `<D x H x W>`
+- **Voxel spacing:** `<...>`
+
+### 4.2 Preprocessing
+- **Intensity normalisation:** <e.g. per-volume z-score> — <justification and reference>
+- **Label encoding:** one-hot, <C> channels
+- **Resampling / downsampling:** <method and factor>
+- **Augmentation:** <flips, rotations, intensity shifts via ... > — <justification>
+
+### 4.3 Train / Validation / Test Split
+| Split      | Patients | Volumes |
+|------------|----------|---------|
+| Train      | <n>      | <n>     |
+| Validation | <n>      | <n>     |
+| Test       | <n>      | <n>     |
+
+**Justification:** <Split is by patient, so all volumes from one patient are in a single split. State the ratio, seed, and why.>
+
+---
+
+## 5. Setup and Reproducibility
+
+### 5.1 Dependencies
+| Package    | Version |
+|------------|---------|
+| Python     | 3.14.5  |
+| PyTorch    | 2.14.0  |
+| ROCM       | 10.1.0  |
+| nibabel    | 5.4.2   |
+| numpy      | 2.5.2   |
+| matplotlib | 3.11.1  |
+
+### 5.2 Reproducibility
+- **Random seed:** `<42>`
+- **Hardware:** <GPU model, VRAM>
+- **Training settings:** optimiser `<...>`, LR `<...>`, batch size `<...>`, epochs `<...>`
+- <Note any non-determinism, e.g. cuDNN.>
+
+### 5.3 Repository Structure
 ```
-recognition/[Improved_UNet3D_sSTUDENTID]/
-├── modules.py     # model components (PyTorch only, no NumPy)
-├── dataset.py     # loading, patient-level split, preprocessing, augmentation
-├── train.py       # training, validation, testing, saving, loss/metric plots
-├── predict.py     # inference + visualisation on test cases
-├── utils.py       # [optional helpers]
-├── images/        # figures used in this README
+recognition/Improved_UNet_<studentID>/
+├── modules.py    # Model components (PyTorch only, no NumPy)
+├── dataset.py    # Data loading, patient-level splits, augmentation
+├── train.py      # Training, validation, testing, saving the model
+├── predict.py    # Inference and visualisation
+├── utils.py      # <Optional helpers: metrics, plotting>
+├── images/       # Figures used in this README
 └── README.md
 ```
 
 ---
 
-## 4. Dependencies and Reproducibility
+## 6. Usage
 
-| Package | Version |
-|---|---|
-| Python | [x.y.z] |
-| PyTorch | [x.y.z] |
-| CUDA | [x.y] |
-| nibabel | [x.y.z] |
-| matplotlib | [x.y.z] |
-| [others] | [ ] |
-
-- **Hardware:** [e.g. NVIDIA A100 on UQ Rangpur]
-- **Random seeds:** [seed values and where they are set]
-- **Data location (not committed):** `/home/groups/comp3710/HipMRI_Study_open/`
-- **Environment setup:** [conda / pip commands]
-
-### Usage
 ```bash
 # Train
-python train.py --data_dir [PATH] --epochs [N] --batch_size [B]
+python train.py --data_dir <path> --epochs <N> --batch_size <B> --save_path <path>
 
-# Predict / visualise
-python predict.py --weights [PATH_TO_WEIGHTS] --data_dir [PATH]
+# Predict and visualise
+python predict.py --data_dir <path> --weights <path> --out_dir <path>
 ```
-<!-- Include the Slurm script you used if helpful (commit the script, not the data or weights). -->
+
+| Argument     | Description           | Default |
+|--------------|-----------------------|---------|
+| `--data_dir` | <Path to HipMRI data> | <...>   |
+| `--epochs`   | <...>                 | <...>   |
+
+**Example input:** <describe a volume and its shape>  
+**Example output:** <describe the predicted label volume and files produced>
+
+> Model weights and datasets are **not** committed to the repository.
 
 ---
 
-## 5. Data and Preprocessing
+## 7. Results
 
-- **Source:** HipMRI Study (3D volumes in `semantic_MRs`, labels in `semantic_labels_only`).
-- **Preprocessing:** [downsampling factor, intensity normalisation (z-score), one-hot encoding, resizing/padding; cite refs].
-- **Augmentation:** [3D flips / rotations / elastic, etc.].
-- **Train / validation / test split:** [numbers of patients and volumes in each].
-- **Split justification:** Patient-level split (all volumes from a patient in exactly one split) to prevent leakage.
-  [Describe how this is enforced and verified in `dataset.py`.]
+### 7.1 Training Curves
+![Loss and Dice curves](images/training_curves.png)
+*Figure 3: <Training and validation loss and Dice per epoch.>*
 
----
+### 7.2 Example Predictions
+![Predictions](images/predictions.png)
+*Figure 4: <Input, ground truth and prediction.>*
 
-## 6. Results
-
-### 6.1 Example inputs and outputs
-<!-- Input slice, ground truth, prediction, difference overlay (FP/FN). -->
-
-![Example prediction](images/[example].png)
-
-### 6.2 Training curves
-![Loss and Dice curves](images/[curves].png)
+### 7.3 Test Set Performance
+| Class        | Dice      | IoU       |
+|--------------|-----------|-----------|
+| Body outline | <...>     | <...>     |
+| Bone         | <...>     | <...>     |
+| Bladder      | <...>     | <...>     |
+| Rectum       | <...>     | <...>     |
+| **Prostate** | **<...>** | **<...>** |
 
 ---
 
-## 7. Investigation of the Open Research Dilemma
-**Spatial context vs. clinical boundary utility:** does 3D context fix base/apex and boundary-leakage errors that a 2D baseline misses, or does it only improve easy central slices at 5-10x the compute?
+## 8. Investigation of the Open Research Dilemma
 
-### 7.1 Quantitative benchmark (identical test split)
+> **Question:** Does multi-scale context or true 3D continuity eliminate hazardous boundary and slice-transition errors compared with a standard 2D baseline, or does it only smooth easy central slices at 5–10× the cost?
 
-| Model | Prostate Dice | Bladder Dice | Rectum Dice | Bone Dice | Body Dice | Mean IoU |
-|---|---|---|---|---|---|---|
-| 2D U-Net (baseline) | | | | | | |
-| 3D U-Net | | | | | | |
-| 3D Improved U-Net | | | | | | |
+### 8.1 Baseline
+<Describe the baseline model(s): e.g. 2D U-Net, 2D Improved U-Net. State that all models use the **same test patients and metrics**. If 2D predictions are stacked into 3D for scoring, explain how.>
 
-### 7.2 Dice by slice region (prostate)
+### 8.2 Quantitative Benchmarking
+| Model                 | Prostate Dice | Prostate IoU | Bladder Dice | Rectum Dice | <Other> |
+|-----------------------|---------------|--------------|--------------|-------------|---------|
+| 2D U-Net (baseline)   | <...>         | <...>        | <...>        | <...>       | <...>   |
+| 2D Improved U-Net     | <...>         | <...>        | <...>        | <...>       | <...>   |
+| **3D Improved U-Net** | <...>         | <...>        | <...>        | <...>       | <...>   |
 
-| Model | Base | Mid | Apex |
-|---|---|---|---|
-| 2D U-Net (baseline) | | | |
-| 3D U-Net | | | |
-| 3D Improved U-Net | | | |
+<Brief interpretation. State whether differences are likely meaningful given the test set size, e.g. report the spread across patients.>
 
-### 7.3 Resource profile
+### 8.3 Where Does Context Help? (Slice-wise Analysis)
+![Dice by slice position](images/dice_by_slice.png)
+*Figure 5: Prostate Dice versus slice position (inferior apex → superior base) for each model.*
 
-| Model | Parameters (M) | Peak training VRAM (GiB) | Training time | Inference per volume (s) |
-|---|---|---|---|---|
-| 2D U-Net (baseline) | | | | |
-| 3D U-Net | | | | |
-| 3D Improved U-Net | | | | |
+<Do the models differ at the apex and base compared with the central slices? Discuss empty-slice handling.>
 
-### 7.4 Failure case autopsies (3-5 cases)
-<!-- For each: multi-panel figure (image | ground truth | prediction | FP/FN overlay), what failed, and the likely root trigger. -->
+### 8.4 Resource Profiling
+| Model             | Parameters | Peak VRAM (GB) | Training time | Inference time / volume |
+|-------------------|------------|----------------|---------------|-------------------------|
+| 2D U-Net          | <...>      | <...>          | <...>         | <...>                   |
+| 2D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
+| 3D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
 
-**Case 1: [e.g. prostate apex slice, over-segmentation into rectal wall]**
-![Case 1](images/[case1].png)
-[Diagnosis]
+### 8.5 Failure Case Autopsy (3–5 cases)
 
-**Case 2:** [...]
+For each case, include the multi-panel figure (image, ground truth, prediction, FP/FN overlay).
 
-**Case 3:** [...]
+#### Case 1: <e.g. prostate apex slice, Patient X>
+![Failure case 1](images/failure_1.png)
+- **What happened:** <...>
+- **Likely trigger:** <e.g. low soft-tissue contrast, partial volume effect>
+- **Did the baseline fail too?** <...>
 
-### 7.5 Engineering recommendation to the project manager
-[Where spatial context delivers measurable gain, where it breaks down, which anatomical cases remain unsuitable for automated drafting, and whether the extra compute is justified.]
+#### Case 2: <...>
+<Repeat the same structure for Cases 3–5.>
+
+### 8.6 Recommendation to the Project Manager
+- **Does 3D context justify its cost?** <Evidence-based answer.>
+- **Where it helps / where it does not:** <...>
+- **Cases unsuitable for automated drafting:** <...>
+- **Suggested workflow:** <e.g. automate central slices, route base/apex to a human>
 
 ---
 
-## 8. Artificial Intelligence Usage Disclosure
-
-- **Tools used:** [e.g. Claude for concept explanation and code scaffolding]
-- **Tasks AI assisted with:** [e.g. drafting model-building blocks, debugging shape errors, README template]
-- **How I audited and verified AI output:** [e.g. unit-checked tensor shapes, verified Dice against a manual calculation, confirmed no patient overlap between splits, ran a tiny-subset overfit test]
+## 9. Limitations and Future Work
+- <Small number of patients, single-centre data, downsampling effects, etc.>
+- <Possible extensions.>
 
 ---
 
-## 9. References
+## 10. Artificial Intelligence Usage Disclosure
 
-1. O. Ronneberger, P. Fischer, T. Brox, "U-Net: Convolutional networks for biomedical image segmentation," MICCAI, 2015.
-2. F. Isensee et al., "Brain tumor segmentation and radiomics survival prediction: Contribution to the BRATS 2017 challenge," 2018.
-3. Ö. Çiçek et al., "3D U-Net: Learning dense volumetric segmentation from sparse annotation," MICCAI, 2016.
-4. [Any additional sources adapted in code or text. Cite in docstrings too.]
+| Tool                  | Used for                                         | How I verified the output                                                 |
+|-----------------------|--------------------------------------------------|---------------------------------------------------------------------------|
+| <e.g. Claude>         | <e.g. explaining theory, debugging shape errors> | <e.g. unit tests on tensor shapes, compared against a hand-computed Dice> |
+| <e.g. GitHub Copilot> | <e.g. auto-complete in plotting code>            | <...>                                                                     |
+
+<Be specific. Note any AI suggestions you rejected or corrected.>
+
+---
+
+## 11. References
+1. <Baseline / dataset reference [1]>
+2. F. Isensee et al., "Brain Tumor Segmentation and Radiomics Survival Prediction: Contribution to the BRATS 2017 Challenge," 2017. <Check the exact reference given in the assignment.>
+3. <3D U-Net reference [4]>
+4. <Any code, library, or online resource adapted — cite it here and in docstrings.>
