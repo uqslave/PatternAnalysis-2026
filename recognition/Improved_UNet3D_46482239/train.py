@@ -6,9 +6,8 @@ import time
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from pathlib import Path
-from torchvision import transforms
 from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
-from modules import UNet, dsc_per_class, DiceCELoss, TverskyCELoss, ImprovedUnet, ImprovedUnet3D
+from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
 
 # Set random seeds for reproducibility
 torch.manual_seed(67)
@@ -28,11 +27,11 @@ dropout = 0.23
 model = ImprovedUnet3D(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 40
-learning_rate = 0.001
+num_epochs = 12
+learning_rate = 0.00043
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=0.00007)
-criterion = DiceCELoss(w=0.5)#DiceCELoss(w=0.5) #TverskyCELoss(a=0.26, b=0.74, w=0.5) #
+criterion = DiceCELoss(w=0.5)
 scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
 output_dir = Path("audit_out/")
@@ -49,10 +48,11 @@ unet_report_path = output_dir / r"unet_report.txt"
 
 print("Training...")
 start_time = time.time()
-training_times = [0.0]
-training_subtime = start_time
+training_times = list()
+training_subtime_cum = start_time
 for epoch in range(num_epochs):
     # ======== Training Segment ========
+    training_subtime = time.time()
     model.train()
     epoch_loss = validation_loss = 0
     losses_per_batch = torch.Tensor().to(device)
@@ -69,7 +69,12 @@ for epoch in range(num_epochs):
         scaler.update()
         optimiser.zero_grad()
 
-        losses_per_batch = torch.cat([losses_per_batch, dsc_per_class(outputs, masks).reshape(-1, len(LABELS))])
+        losses_per_batch = torch.cat(
+            [
+                losses_per_batch,
+                torch.mean(dsc_per_class(outputs, masks), dim=0).reshape(-1, len(LABELS))
+            ]
+        )
         epoch_loss = epoch_loss + loss.item()
 
     unet_report_train_temp = unet_report_train_temp + f"Mean DSC per class at epoch {epoch + 1}/{num_epochs}\n"
@@ -83,12 +88,13 @@ for epoch in range(num_epochs):
     accuracy_scores.append(1 - avg_loss)
     out_str = f"Epoch {epoch + 1}/{num_epochs} | Average Loss: {avg_loss:.3f}"
 
+    training_subtime_cum = time.time() - training_subtime_cum
     training_subtime = time.time() - training_subtime
     training_times.append(training_subtime)
 
     # ======== Validate Segment ========
     model.eval()
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
         for val_images, val_masks in validate_dataloader:
             val_images = val_images.to(device)
             val_masks = val_masks.to(device)
@@ -97,7 +103,10 @@ for epoch in range(num_epochs):
             val_loss = criterion(outputs, val_masks)
             validation_loss = validation_loss + val_loss.item()
             losses_per_batch_temp = torch.cat(
-                [losses_per_batch_temp, dsc_per_class(outputs, val_masks).reshape(-1, len(LABELS))]
+                [
+                    losses_per_batch_temp,
+                    torch.mean(dsc_per_class(outputs, val_masks), dim=0).reshape(-1, len(LABELS))
+                ]
             )
 
         unet_report_validation_temp = unet_report_validation_temp + f"Mean DSC per class for validation set at epoch {epoch + 1}/{num_epochs}\n"
@@ -109,9 +118,12 @@ for epoch in range(num_epochs):
     avg_validation_loss = validation_loss / len(validate_dataloader)
     val_losses.append(avg_validation_loss)
     val_accuracy_scores.append(1 - avg_validation_loss)
-    out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}\tTime: {training_subtime:.3f}s"
-    training_subtime = time.time() - training_subtime
+    out_str = out_str + f" | Validation Loss: {avg_validation_loss:.3f}\tTime: {training_subtime:.3f}s\tTime Cum: {training_subtime_cum}"
+    training_subtime_cum = time.time() - training_subtime_cum
     print(out_str)
+
+    del outputs, loss
+    torch.cuda.empty_cache()
 
 
 outpath = output_dir / f"unet_improved_3d.pth"
