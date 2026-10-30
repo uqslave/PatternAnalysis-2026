@@ -64,7 +64,7 @@ def main():
         epoch_loss = validation_loss = 0
         losses_per_batch = torch.Tensor().to(device)
         losses_per_batch_temp = torch.Tensor().to(device)
-        print("Epoch {epoch + 1}/{num_epochs}")
+        print(f"Epoch {epoch + 1}/{num_epochs}")
         for batch_idx, (images, masks) in enumerate(train_dataloader):
             print(f"\tBatch {batch_idx + 1}/{len(train_dataloader)}")
             images = images.to(device)
@@ -103,14 +103,17 @@ def main():
         # ==============================================================================================================
         # =                                              Validation Loop                                               =
         # ==============================================================================================================
+        print("\tPerforming Validation...")
         model.eval()
-        with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16):
-            for val_images, val_masks in validate_dataloader:
+        with torch.no_grad():
+            for batch_idx, (val_images, val_masks) in enumerate(validate_dataloader):
+                print(f"\tBatch {batch_idx + 1}/{len(validate_dataloader)}")
                 val_images = val_images.to(device)
                 val_masks = val_masks.to(device)
 
-                outputs = model(val_images)
-                val_loss = criterion(outputs, val_masks)
+                with torch.autocast("cuda", dtype=torch.float16):
+                    outputs = model(val_images)
+                    val_loss = criterion(outputs, val_masks)
                 validation_loss = validation_loss + val_loss.item()
                 losses_per_batch_temp = torch.cat(
                     [
