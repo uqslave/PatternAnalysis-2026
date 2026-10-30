@@ -1,8 +1,8 @@
 """
 How to run:
-    python predict.py --model [3D | 2D]
-Choose 3D to run inference with 3D Improved UNet;
-Choose 2D to run inference with 2D Improved UNet;
+    python predict.py --model <3D or 2D>
+Choose 3D to run inference with 3D Improved U-Net;
+Choose 2D to run inference with 2D Improved U-Net;
 """
 
 import torch
@@ -217,38 +217,45 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
     :param batch_size: Test batch size
     :return: Inference results
     """
-    model.eval()
+    predictions_all, targets_all = list(), list()
 
-    return ""
+    print("Running inference...")
+    model.eval()
+    for batch_idx, (image, target) in enumerate(loader):
+        print(f"Batch: {batch_idx + 1}/{len(loader)}")
+        image, target = image.to(device), target.to(device)
+        predictions = model(image)
+
+        predictions_all.append(predictions.argmax(1).to(torch.uint8).cpu())
+        targets_all.append(target.argmax(1).to(torch.uint8).cpu())
+
+    table = metrics_to_string(compute_metrics(torch.cat(predictions_all), torch.cat(targets_all)))
+    print(table)
+
+    return "\n" + table + "\n"
 
 
 # ======================================================================================================================
 # =                                                     Main Guard                                                     =
 # ======================================================================================================================
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    output_dir = Path("audit_out/")
-    output_dir.mkdir(parents=True, exist_ok=True)
+def main(argsv):
+    model_dir = Path("trained_model/")
+    model_dir.mkdir(parents=True, exist_ok=True)
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", type = str, required = True)
-    args = ap.parse_args()
-
-    if args.model == "3d":
+    if argsv.model == "3D":
         # For 3D Improved UNet
         model = ImprovedUnet3D(in_channels=1, out_channels=len(LABELS))
         model = model.to(device)
-        model_path = r"audit_out/unet_model_3D.pth"
+        model_path = model_dir / r"unet_improved_3D.pth"
         model.load_state_dict(torch.load(model_path, map_location=device))
         test_dataloader = get_dataloader_3d("test")
         inference_result = run_inference3d(model, test_dataloader, device, BATCH_SIZE_3D["test"])
-    elif args.model == "2d":
+    elif argsv.model == "2D":
         # For 2D Improved UNet
         model = ImprovedUnet(in_channels=1, out_channels=len(LABELS))
         model = model.to(device)
 
-        model_path = r"audit_out/unet_improved_dsc.pth"
+        model_path = model_dir / r"unet_improved_dsc.pth"
         model.load_state_dict(torch.load(model_path, map_location=device))
 
         test_dataloader = get_dataloader_2d("test")
@@ -266,3 +273,15 @@ if __name__ == "__main__":
     unet_report_file = open(out_path, "w")
     unet_report_file.write(unet_report_str)
     unet_report_file.close()
+
+if __name__ == "__main__":
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", type = str, required = True)
+    args = ap.parse_args()
+
+    output_dir = Path("images/")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    main(args)
