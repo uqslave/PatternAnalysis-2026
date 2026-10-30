@@ -1,11 +1,9 @@
-# 3D Improved U-Net for Prostate Segmentation on HipMRI
+# 3D Improved U-Net for HipMRI Segmentation
 
-**Student:** Joseph Zhang, 46482239\
+**Student ID:** 46482239\
 **Course:** COMP3710 Pattern Analysis, 2026\
 **Project:** 3D Improved U-Net for HipMRI Segmentation\
 **Github:** `recognition/Improved_UNet3D_46482239/`
-
-> Replace every `<...>` placeholder. Delete these instruction blockquotes before submitting.
 
 ---
 
@@ -18,20 +16,21 @@
 6. [Usage](#6-usage)
 7. [Results](#7-results)
 8. [Investigation of the Open Research Dilemma](#8-investigation-of-the-open-research-dilemma)
-9. [Limitations and Future Work](#9-limitations-and-future-work)
-10. [Artificial Intelligence Usage Disclosure](#10-artificial-intelligence-usage-disclosure)
-11. [References](#11-references)
+9. [Artificial Intelligence Usage Disclosure](#9-generative-ai-disclosure)
+10. [References](#10-references)
 
 ---
 
 ## 1. Overview
 
-> About one paragraph: the problem, why it matters clinically, what your model does.
-
-Prostate radiotherapy planning requires millimetre-level delineation of the prostate while sparing nearby organs at risk (bladder, rectum, femoral heads). This project implements a **3D Improved U-Net** [2] that segments the <body outline, bone, bladder, rectum, prostate> from pelvic MRI volumes in the HipMRI study. It is benchmarked against a <2D U-Net> baseline to investigate whether volumetric context removes boundary errors at the prostate base and apex.
+Prostate radiotherapy planning requires millimetre-level delineation of the prostate while sparing nearby organs at risk
+(bladder, rectum, femoral heads). This project implements a 3D Improved U-Net [2] that segments the background, body 
+outline, bone, bladder, rectum, prostate from pelvic MRI volumes in the HipMRI study. It is benchmarked against a 2D 
+Improved U-Net with the same kind of residual connections and deep supervision baseline to investigate whether 
+volumetric context soothes boundary errors at the prostate base and apex.
 
 ![Headline figure](images/headline_figure.png)
-*Figure 1: <Caption — e.g. input, ground truth and prediction overlay.>*
+*Figure 1: Sample segmentation featuring the (a) input, (b) ground truth, and (c) prediction overlay*
 
 ---
 
@@ -46,7 +45,7 @@ since training a 3D segmentation model will up many times more the computation r
   1. Prostate Dice Score (present) ≥ 0.70 on unseen test set;
   2. Prostate IoU Score (present) ≥ 0.70 on unseen test set;
   3. Peak GPU VRAM ≤ 35 GiB during training;
-  4. Inference time ≤ 1.0 s per volume;
+  4. Inference time ≤ 30 s per volume on A100;
   5. No data leaks by ensuring patient-level splits. We can gauge this using ‘assert’ in code.
 
 ### 2.2 Model Choice and Course Concepts
@@ -62,6 +61,8 @@ performance to a 2D Improved U-Net with the same residual blocks and deep superv
 Initial data audit yields the following information shown. Data is compatible, consistent, and can be split at a patient
 level.
 
+*Table 1: Prelimnary data audit*
+
 | Item                         | Description                                                                                                |
 |------------------------------|------------------------------------------------------------------------------------------------------------|
 | Total Scans                  | 211                                                                                                        |
@@ -72,6 +73,8 @@ level.
 
 
 ### 2.4 Risks, Budget and Fallback
+*Table 2: risks and constraints*
+
 | Risk                   | Mitigation                                                                                                   |
 |------------------------|--------------------------------------------------------------------------------------------------------------|
 | OOM (VRAM)             | Random patch in sizing `__get_item__`; Mixed precision; Small batch size; Load tensor only in `__get_item__` |
@@ -80,7 +83,7 @@ level.
 
 ---
 
-## 3. How the Algorithm Works
+## 3. Network Architecture
 
 > Explain the working principles (this is worth 5 marks). Aim for clarity over length.
 
@@ -89,6 +92,8 @@ Simply put, a U-Net is an autoencoder-like network. But, unlike autoencoders, U-
 skip connections that transfer information between the encoder and the decoder of the same resolution. This skip 
 connection is what mitigates the loss of information (preserves spatial detail) as it gets downsampled in the encoders 
 and passes through the (bottleneck) latent layer.
+![Architecture diagram](images/unet.png)\
+*Figure 2: Architecture of a U-Net*
 
 The role of the encoder is to extract abstract features of an input. In the middle, the bottleneck holds the most abstract, highest-
 channel representation while still retaining spatial structure. The decoder takes the data from this latent 
@@ -100,6 +105,11 @@ gives us the per-pixel class probabilities, and taking the argmax yields the seg
 the every object in the original input.
 
 ### 3.2 Improvements over the Standard U-Net
+Table 3 lists the main difference between a standard U-Net and an improved U-Net that implements residual blocks, 
+accompanied by an illustration featured in Figure 3 below.
+
+*Table 3: Differences between a standard U-Net and Improved U-Net*
+
 | Component              | Function                                                                                                                                      | Why it helps here                                                                                                                                                                                                                   |
 |------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Residual modules       | Adds two 3x3 convolution blocks with a shortcut added to the block's output; acts as a skip connection between each encoder/decoder           | Allows the network to only have to learn the difference before and after each block rather than across the entire network.<br/>Resolves the vanishing gradient problem; better results when training.                               |
@@ -107,10 +117,10 @@ the every object in the original input.
 | leaky ReLU             | Introduces a small slope on the negative side.                                                                                                | Ensures a small gradient still flows back during backpropagation; doesn't kill neurons.                                                                                                                                             |
 | Instance normalisation | normalises each channel of each sample independently across its spatial dimensions.                                                           | Allows for smaller batch sizes to save on VRAM usage since its outputs don’t depend on the batch                                                                                                                                    |
 
-### 3.3 3D vs 2D Convolutions
-<Inter-slice context vs memory cost. Include a kernel/feature-map size comparison if useful.>
+![Architecture diagram](images/improved_unet.png)\
+*Figure 3: Architecture of an improved U-Net [2]*
 
-### 3.4 Loss Function
+### 3.3 Loss Function
 In an image segmentation task, we want the model to make accurate predictions on both at pixel-level and general-level.
 For other models where we have similar goals, Cross Entropy Loss is usually the standard loss function for its ability 
 to perform pixel classifications with the softmax function. However, for datasets with sever imbalance, CE by itself may 
@@ -124,34 +134,40 @@ $$\mathcal{L}_{DSC} = 1 - \frac{1}{C} \sum_{c=1}^{C} \text{DSC}_c$$
 $$\mathcal{L}_{CE} = - \sum_{i=1}^{N} \sum_{c=1}^{C} y_{i,c} \log(\hat{y}_{i,c})$$
 Implementation of these loss functions can be found in modules.py
 
-![Architecture diagram](images/architecture.png)
-*Figure 2: <Architecture of the 3D Improved U-Net.>*
+
 
 ---
 
 ## 4. Data and Preprocessing
 
 ### 4.1 Dataset
-- **Source:** HipMRI Study (`/home/groups/comp3710/HipMRI_Study_open`) — 38 patients, 211 volumes
+- **Source:** HipMRI Study (on rangpur:`/home/groups/comp3710/HipMRI_Study_open`) — 38 patients, 211 volumes
 - **Labels:** `0: background, 1: body outline, 2: bone, 3: bladder, 4: rectum, 5: prostate`
-- **Input shape:** `(128, 256, 256)`
-- **Voxel spacing:** `<...>`
+- **Input shape:** Shape of `(256, 256, 128)` with dimensions $H$, $W$, $D$ 
+- **Volume size:** $\text{~}256 \text{ MB}$ depending of precision
+  - Made up of `256x256x128`voxels ($8,388,608\text{ voxels}$)
+  - Each volume loaded into float32 tensors/arrays $32\times 8,388,608=256 \text{ MB}$
 
 ### 4.2 Preprocessing
-- **Intensity normalisation:** <e.g. per-volume z-score> — <justification and reference>
-- **Label encoding:** one-hot with 6 channels (labels)
-- **Resampling / downsampling:** 2D scans are cropped to 256x128 when necessary
+- **Splits:** Patient level splits according to the proportions listed in section 4.3
+- **Label encoding:** One-hot with 6 channels (labels)
+- **Resampling / downsampling:** 2D scans are cropped to `256x128` when necessary
 
 ### 4.3 Train / Validation / Test Split
 A total of 211 scans across 38 patients was provided.
 
+*Table 4: Split proportions of the 3D dataset*
+
 | Split      | Proportion | Patients | Volumes |
 |------------|------------|----------|---------|
-| Train      | 0.80       |        |      |
-| Validation | 0.08       |         |       |
-| Test       | 0.12       |         |       |
+| Train      | 0.9052     |          |         |
+| Validation | 0.0521     |          |         |
+| Test       | 0.0427     | 2        | 9       |
 
-**Justification:** <Split is by patient, so all volumes from one patient are in a single split. State the ratio, seed, and why.>
+The data is split in accordance to the ratios defined by the 2D MRI scans below:
+- **Train:** $11,460 / 12,660 \approx 90.52\%$
+- **Validate:** $660 / 12,660 \approx 5.21\%$
+- **Test:** $540 / 12,660 \approx 4.27\%$
 
 ---
 
@@ -219,7 +235,7 @@ python predict.py --model <"3D" or "2D">
 | Argument   | Description                   | Default |
 |------------|-------------------------------|---------|
 | `--model`  | 2D or 3D Improved U-Net       | None    |
-| `--epochs` | Number of epochs to train for | 60      |
+| `--epochs` | Number of epochs to train for | 80      |
 
 ---
 
@@ -227,13 +243,15 @@ python predict.py --model <"3D" or "2D">
 
 ### 7.1 Training Curves
 ![Loss and Dice curves](images/training_curves.png)
-*Figure 3: <Training and validation loss and Dice per epoch.>*
+*Figure 4: <Training and validation loss and Dice per epoch.>*
 
 ### 7.2 Example Predictions
 ![Predictions](images/predictions.png)
-*Figure 4: <Input, ground truth and prediction.>*
+*Figure 5: <Input, ground truth and prediction.>*
 
 ### 7.3 Test Set Performance
+*Table 6: Inference results with unseen test set*
+
 | Class        | Dice Score (Aggregate) | Dice Score (Present) | Dice Score (Pooled) | IoU (Pooled) | FPR |
 |--------------|------------------------|----------------------|---------------------|--------------|-----|
 | Background   |                        |                      |                     |              |     |
@@ -257,12 +275,13 @@ interest is present in the ground truth masks.\
 > **Question:** Does multi-scale context or true 3D continuity eliminate hazardous boundary and slice-transition errors compared with a standard 2D baseline, or does it only smooth easy central slices at 5–10× the cost?
 
 ### 8.1 Baseline
-<Describe the baseline model(s): e.g. 2D U-Net, 2D Improved U-Net. State that all models use the **same test patients and metrics**. If 2D predictions are stacked into 3D for scoring, explain how.>
+The base model is a 2D improved U-Net with the same kind of residual connections and deep supervision.
 
-### 8.2 Quantitative Benchmarking
+### 8.2 Benchmark Against Base Model
+*Table 6: Inference results against baseline*
+
 | Model                 | Prostate Dice Score (present) | Prostate Dice Score | Prostate IoU | FPR    | Dice Score (Aggregate) |
 |-----------------------|-------------------------------|---------------------|--------------|--------|------------------------|
-| 2D U-Net (baseline)   | <...>                         |                     | <...>        | <...>  | <...>                  |
 | 2D Improved U-Net     | 0.762                         | 0.867               | 0.766        | 0.0006 | 0.905                  |
 | **3D Improved U-Net** | <...>                         |                     | <...>        | <...>  | <...>                  |
 
@@ -275,9 +294,10 @@ interest is present in the ground truth masks.\
 <Do the models differ at the apex and base compared with the central slices? Discuss empty-slice handling.>
 
 ### 8.4 Resource Profiling
+*Table 7: Resource usage during training*
+
 | Model             | Parameters | Peak VRAM (GB) | Training time | Inference time / volume |
 |-------------------|------------|----------------|---------------|-------------------------|
-| 2D U-Net          | <...>      | <...>          | <...>         | <...>                   |
 | 2D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
 | 3D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
 
@@ -302,13 +322,8 @@ For each case, include the multi-panel figure (image, ground truth, prediction, 
 
 ---
 
-## 9. Limitations and Future Work
-- <Small number of patients, single-centre data, downsampling effects, etc.>
-- <Possible extensions.>
-
----
-
-## 10. Generative AI Disclosure
+## 9. Generative AI Disclosure
+*Table 8: GenAI disclosure*
 
 | Tool              | Used for                             | Verification Processes                                                                                   |
 |:------------------|--------------------------------------|----------------------------------------------------------------------------------------------------------|
@@ -320,7 +335,7 @@ For each case, include the multi-panel figure (image, ground truth, prediction, 
 
 ---
 
-## 11. References
+## 10. References
 1. <Baseline / dataset reference [1]>
 2. F. Isensee et al., "Brain Tumor Segmentation and Radiomics Survival Prediction: Contribution to the BRATS 2017 Challenge," 2017. <Check the exact reference given in the assignment.>
 3. <3D U-Net reference [4]>
