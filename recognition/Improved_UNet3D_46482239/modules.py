@@ -250,9 +250,10 @@ class DiceCELoss(nn.Module):
     predictions : softmax output [B, K, H, W]
     targets: ground truth one-hot encoding   [B, K, H, W]
     """
-    def __init__(self, w: float = 0.5, smooth: float = 1.0):
+    def __init__(self, w: float = 0.5, smooth: float = 1.0, eps: float = 1e-7):
         super().__init__()
         self.w = w
+        self.eps = eps
         self.dice = DiceLoss(smooth=smooth)
 
     def forward(self, predictions, targets):
@@ -260,8 +261,7 @@ class DiceCELoss(nn.Module):
 
         # Multi-class Cross-Entropy using Softmax probabilities
         # Using 1e-7 instead of 1e-3 prevents artificial penalty capping
-        eps = 1e-7
-        ce_map = (-1.0 * targets * torch.log(predictions.clamp(min=eps))).sum(dim=1)
+        ce_map = (-1.0 * targets * torch.log(predictions.clamp(min=self.eps))).sum(dim=1)
 
         ce_loss = ce_map.mean()
         dice_loss = self.dice(predictions, targets)
