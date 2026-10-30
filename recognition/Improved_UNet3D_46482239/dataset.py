@@ -53,9 +53,9 @@ BATCH_SIZE_3D = {
 }
 TR_ID, VA_ID, TE_ID = range(3)
 SPLIT_PROPS = ( # For 3D scans; this one is a tuple because it's easier to work with.
-    0.74,       # Train
-    0.07,       # Validate
-    0.19,       # Test
+    0.9052,     # Train
+    0.0521,     # Validate
+    0.0427,     # Test
 )
 assert sum(SPLIT_PROPS) == 1.0, "Split ratios not correct!"
 IMAGE_COUNT_2D = {
@@ -68,7 +68,7 @@ IMAGE_COUNT_3D = {
     "validate": 211 * SPLIT_PROPS[VA_ID],
     "test":     211 * SPLIT_PROPS[TE_ID],
 }
-COUNT_3D_EPS = 0.15 # Splitting 3D scans is a subset-sum problem.
+COUNT_3D_EPS = 0.05 # Splitting 3D scans is a subset-sum problem.
                     # We might not be able to get exact numbers, so we need some leniency when checking if splits
                     # are precise and accurate.
 
@@ -385,9 +385,9 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
     Patient-level splits to prevent data leakage.
     """
     PATCH = (   # Each must be divisible by 4 because of the two pooling steps in the model
-        64,     # D
-        128,    # H
-        128,    # W
+        80,    # D
+        152,    # H
+        152,    # W
     )
 
     def __init__(self, dataset: str, transform=None):
@@ -409,9 +409,7 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
             self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
         assert len(self.raw_files) == len(self.mask_files), "Dataset mismatch in 3D split."
 
-        maths = abs(1.0 - (len(self.raw_files) / IMAGE_COUNT_3D[dataset]))
-        kkk = IMAGE_COUNT_3D[dataset]
-        if maths > COUNT_3D_EPS:
+        if abs(1.0 - (len(self.raw_files) / IMAGE_COUNT_3D[dataset])) > COUNT_3D_EPS:
             # Should negate the need to manually run the nii_to_npy script whenever we want to change split ratios.
             print("3D Splits not correct; Re-processing splits to .npy files...")
             for d_set in SPLIT.keys():
@@ -493,8 +491,8 @@ class HipMRIDataset(torch.utils.data.Dataset):
         mask_scan = np.load(self.mask_files[index], mmap_mode="r")
 
         # Better to use from_numpy() here since the masks are assigned an integer in sequential order.
-        raw_image = torch.from_numpy(raw_scan)
-        mask_image = torch.from_numpy(mask_scan)
+        raw_image = torch.from_numpy(raw_scan.copy())
+        mask_image = torch.from_numpy(mask_scan.copy())
 
         raw_image = raw_image.unsqueeze(0)
         mask_image = mask_image.float()     # Can leave as float32 for now. Consider mixed precision later.
