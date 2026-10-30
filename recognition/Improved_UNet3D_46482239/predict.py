@@ -20,6 +20,12 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from dataset import LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D
 from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class
+from utils import SEED
+
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+torch.cuda.manual_seed(SEED)
 
 # ======================================================================================================================
 # =                                               Score Summary Helpers                                                =

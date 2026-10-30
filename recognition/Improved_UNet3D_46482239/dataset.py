@@ -10,6 +10,12 @@ from torch.utils.data import DataLoader, dataset
 from torchvision import transforms
 from tqdm import tqdm
 from collections import Counter
+from utils import SEED
+
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+torch.cuda.manual_seed(SEED)
 
 # ======================================================================================================================
 # =                                               Configurations & Paths                                               =
@@ -238,7 +244,7 @@ def load_data_2D(imageNames, target_shape=(256, 128), normImage=False,
 # ======================================================================================================================
 # =                                             Patient Splitting Helpers                                              =
 # ======================================================================================================================
-def split3D(image_names: list, mask_names: list, seed: int | str = 69) -> tuple[set[str]]:
+def split3D(image_names: list, mask_names: list, seed: int | str = SEED) -> tuple[set[str]]:
     """
     Perform patient-level split for the 3D HipMRI scans by employing the subset-sum-problem
     :param image_names: The file names (and dir) of the raw scans

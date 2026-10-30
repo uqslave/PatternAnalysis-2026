@@ -9,29 +9,30 @@ from pathlib import Path
 from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
 from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
 from predict import metrics_to_string, compute_metrics
+from utils import SEED
+
+# Set random seeds for reproducibility
+torch.manual_seed(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+torch.cuda.manual_seed(SEED)
+
 
 # ======================================================================================================================
 # =                                             Hyperparameter definitions                                             =
 # ======================================================================================================================
-
-# Set random seeds for reproducibility
-torch.manual_seed(67)
-np.random.seed(67)
-random.seed(67)
-torch.cuda.manual_seed(67)
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
-dropout = 0.24
+dropout = 0.25
 model = ImprovedUnet3D(in_channels, out_channels, dropout)
 model = model.to(device)
 
-num_epochs = 120
-learning_rate = 3.1e-5
+num_epochs = 60
+learning_rate = 3.1e-4
 optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=1.2e-9)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=1.2e-7)
 criterion = DiceCELoss(w=0.5)
 scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
@@ -69,7 +70,7 @@ def main():
         losses_per_batch_temp = torch.Tensor().to(device)
         print(f"Epoch {epoch + 1}/{num_epochs}")
         for batch_idx, (images, masks) in enumerate(train_dataloader):
-            print(f"\tBatch {batch_idx + 1}/{len(train_dataloader)}")
+            #print(f"\tBatch {batch_idx + 1}/{len(train_dataloader)}")
             images = images.to(device)
             masks = masks.to(device)
             with torch.autocast("cuda", dtype=torch.float16):
@@ -106,7 +107,7 @@ def main():
         # ==============================================================================================================
         # =                                              Validation Loop                                               =
         # ==============================================================================================================
-        print("\tPerforming Validation...")
+        #print("\tPerforming Validation...")
         model.eval()
         with torch.no_grad():
             for batch_idx, (val_images, val_masks) in enumerate(validate_dataloader):

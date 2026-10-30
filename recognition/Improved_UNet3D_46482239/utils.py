@@ -5,6 +5,8 @@ import torch
 import pandas as pd
 from pathlib import Path
 
+SEED = 67
+torch.manual_seed(SEED)
 
 output_dir = Path("audit_out/")
 output_dir.mkdir(parents=True, exist_ok=True)
