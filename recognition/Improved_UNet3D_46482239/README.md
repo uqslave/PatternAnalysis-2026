@@ -1,9 +1,9 @@
 # 3D Improved U-Net for Prostate Segmentation on HipMRI
 
-**Student:** <Name> (<Student ID>)  
-**Course:** COMP3710 Pattern Analysis, 2026  
-**Project:** Segmentation (HipMRI) — 3D Improved U-Net [Hard Difficulty]  
-**Folder:** `recognition/Improved_UNet_<studentID>/`
+**Student:** Joseph Zhang, 46482239\
+**Course:** COMP3710 Pattern Analysis, 2026\
+**Project:** 3D Improved U-Net for HipMRI Segmentation\
+**Github:** `recognition/Improved_UNet3D_46482239/`
 
 > Replace every `<...>` placeholder. Delete these instruction blockquotes before submitting.
 
@@ -37,32 +37,46 @@ Prostate radiotherapy planning requires millimetre-level delineation of the pros
 
 ## 2. Feasibility Review
 
-> Paste your one-page review from the midpoint check-off. Keep all four parts.
-
 ### 2.1 User Need, Scope and Acceptance Criteria
-- **Intended user:** <e.g. radiation oncologist reviewing draft contours>
-- **Purpose:** <annotation assistant that proposes contours>
+The model will primarily be targeted towards healthcare professionals, with the main goal being to investigate the 
+feasibility of using a 3D automated segmentation model in medical imaging. Specifically, to aid in the identification of 
+the prostate in MRI scans. The primary dilemma here is the accuracy trade-off for using 3D scans instead of 2D scans 
+since training a 3D segmentation model will up many times more the computation resources.
 - **Acceptance criteria (3–5, testable):**
-  1. Prostate Dice ≥ <0.70> on the held-out test set.
-  2. <Prostate Dice at base/apex slices ≥ X, or boundary criterion>.
-  3. Peak GPU VRAM ≤ <X GB> during training.
-  4. Inference time ≤ <X s> per volume.
+  1. Prostate Dice Score (present) ≥ 0.70 on unseen test set;
+  2. Prostate IoU Score (present) ≥ 0.70 on unseen test set;
+  3. Peak GPU VRAM ≤ 35 GiB during training;
+  4. Inference time ≤ 1.0 s per volume;
+  5. No data leaks by ensuring patient-level splits. We can gauge this using ‘assert’ in code.
 
 ### 2.2 Model Choice and Course Concepts
-<Dataset configuration, architecture, difficulty band, and how course concepts and literature support the choices.>
+The dataset will be split at the patient-level, and we will separate the data into a training set, validation set, and 
+test set with the following weights of 0.80, 0.08, 0.12 (or similar). As an initial model, we will take inspiration from
+<___67876> and use a 3D Improved U-Net with residual blocks and deep supervision and choose LeakyReLU and InstanceNorm 
+units in the residual blocks. Four (encoder & decoder) layers will be implemented, and we will use 2-layer deep 
+supervision. Dice-CE loss will be the basic loss function, and Tversky-CE loss can be considered if more suitable. We 
+can implement the base U-Net in accordance with the example shown in week 7/8 of COMP3710. We will compare the 
+performance to a 2D Improved U-Net with the same residual blocks and deep supervision.
 
 ### 2.3 Preliminary Feasibility Evidence
-<Data audit (counts, shapes, class balance), baseline smoke test, measured VRAM estimate.>
+Initial data audit yields the following information shown. Data is compatible, consistent, and can be split at a patient
+level.
+
+| Item                         | Description                                                                                                |
+|------------------------------|------------------------------------------------------------------------------------------------------------|
+| Total Scans                  | 211                                                                                                        |
+| Patient Count                | 38                                                                                                         |
+| Image Dimensions/shape       | All scans are `(256, 256, 128)` in $H$, $W$, $D$                                                           |
+| Patient ID format            | All file names are in the format of `LNNN_WeekX_LFOV/SEMANTIC.nii.gz`<br/>Ex. `B010_Week3_SEMANTIC.nii.gz` |
+| 2D Improved U-Net VRAM usage |                                                                                                            |
+
 
 ### 2.4 Risks, Budget and Fallback
-| Risk                       | Mitigation                                            |
-|----------------------------|-------------------------------------------------------|
-| <GPU memory limits for 3D> | <Downsample / patch-based training / mixed precision> |
-| <Severe class imbalance>   | <Dice-based loss>                                     |
-
-- **Compute budget:** <e.g. N GPU-hours on Rangpur>
-- **Next experiment:** <...>
-- **Fallback:** <e.g. 3D U-Net, or 2D Improved U-Net>
+| Risk                   | Mitigation                                                                                                   |
+|------------------------|--------------------------------------------------------------------------------------------------------------|
+| OOM (VRAM)             | Random patch in sizing `__get_item__`; Mixed precision; Small batch size; Load tensor only in `__get_item__` |
+| Class imbalance        | Dice Loss + Cross Entropy Loss in training                                                                   |
+| Exorbant training time | 2D Improved U-Net is available and working                                                                   |
 
 ---
 
@@ -71,23 +85,44 @@ Prostate radiotherapy planning requires millimetre-level delineation of the pros
 > Explain the working principles (this is worth 5 marks). Aim for clarity over length.
 
 ### 3.1 U-Net Backbone
-<Encoder–decoder, skip connections, why they preserve spatial detail.>
+Simply put, a U-Net is an autoencoder-like network. But, unlike autoencoders, U-Nets are supervised and feature
+skip connections that transfer information between the encoder and the decoder of the same resolution. This skip 
+connection is what mitigates the loss of information (preserves spatial detail) as it gets downsampled in the encoders 
+and passes through the (bottleneck) latent layer.
 
-### 3.2 Improvements over the Standard U-Net [2]
-| Component                           | What it does                                                         | Why it helps here         |
-|-------------------------------------|----------------------------------------------------------------------|---------------------------|
-| Residual context modules            | <...>                                                                | <...>                     |
-| Localisation modules                | <...>                                                                | <...>                     |
-| Deep supervision                    | <Segmentation maps at multiple decoder levels, upsampled and summed> | <...>                     |
-| Instance normalisation / leaky ReLU | <...>                                                                | <Small batch sizes in 3D> |
+The role of the encoder is to extract abstract features of an input. In the middle, the bottleneck holds the most abstract, highest-
+channel representation while still retaining spatial structure. The decoder takes the data from this latent 
+layer and progressively upsamples it to the original input-resolution while also attempting to produce a per-pixel class 
+prediction. At each level, the encoder feature map of matching resolution is concatenated onto the decoder’s feature 
+map, which restores the fine spatial detail lost during downsampling. Unlike an autoencoder, which reconstructs its 
+input, a U-Net outputs $K$ channels (one per class) via a final 1×1 convolution. Then, a softmax over these channels 
+gives us the per-pixel class probabilities, and taking the argmax yields the segmentation mask (akin to a silhouette) of
+the every object in the original input.
+
+### 3.2 Improvements over the Standard U-Net
+| Component              | Function                                                                                                                                      | Why it helps here                                                                                                                                                                                                                   |
+|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Residual modules       | Adds two 3x3 convolution blocks with a shortcut added to the block's output; acts as a skip connection between each encoder/decoder           | Allows the network to only have to learn the difference before and after each block rather than across the entire network.<br/>Resolves the vanishing gradient problem; better results when training.                               |
+| Deep supervision       | Segmentation maps (1×1 conv) are taken from several decoder levels, upsampled to a common size and summed element-wise into the final output. | The loss gradient reaches the earlier decoder layers through a short path, so training converges faster and vanishing gradients are reduced. It also forces intermediate features to be useful for segmentation at multiple scales. |
+| leaky ReLU             | Introduces a small slope on the negative side.                                                                                                | Ensures a small gradient still flows back during backpropagation; doesn't kill neurons.                                                                                                                                             |
+| Instance normalisation | normalises each channel of each sample independently across its spatial dimensions.                                                           | Allows for smaller batch sizes to save on VRAM usage since its outputs don’t depend on the batch                                                                                                                                    |
 
 ### 3.3 3D vs 2D Convolutions
 <Inter-slice context vs memory cost. Include a kernel/feature-map size comparison if useful.>
 
 ### 3.4 Loss Function
-<Equation and justification, e.g. the soft Dice loss:>
-
-$$\mathcal{L}_{Dice} = 1 - \frac{2\sum_i p_i g_i + \epsilon}{\sum_i p_i + \sum_i g_i + \epsilon}$$
+In an image segmentation task, we want the model to make accurate predictions on both at pixel-level and general-level.
+For other models where we have similar goals, Cross Entropy Loss is usually the standard loss function for its ability 
+to perform pixel classifications with the softmax function. However, for datasets with sever imbalance, CE by itself may 
+plunder the model by learning to just predict the dominant class. To mitigate this, we introduce the Dice Similarity
+Coefficient (DSC). This is because DSC calculates the overlap between the predicted segmentation and the ground truth, 
+and focuses on the intersection over union of the specific classes rather than raw pixel counts. Consequently, this is
+what makes it a suitable choice for datasets (like the HipMRI) with class imbalance.
+The equations for DSC, Dice Loss, and CE are as follows: 
+$$\text{DSC}_c = \frac{2 \sum_{i=1}^{N} y_{i,c} \hat{y}_{i,c} + \epsilon}{\sum_{i=1}^{N} y_{i,c} + \sum_{i=1}^{N} \hat{y}_{i,c} + \epsilon}$$
+$$\mathcal{L}_{DSC} = 1 - \frac{1}{C} \sum_{c=1}^{C} \text{DSC}_c$$
+$$\mathcal{L}_{CE} = - \sum_{i=1}^{N} \sum_{c=1}^{C} y_{i,c} \log(\hat{y}_{i,c})$$
+Implementation of these loss functions can be found in modules.py
 
 ![Architecture diagram](images/architecture.png)
 *Figure 2: <Architecture of the 3D Improved U-Net.>*
@@ -97,29 +132,30 @@ $$\mathcal{L}_{Dice} = 1 - \frac{2\sum_i p_i g_i + \epsilon}{\sum_i p_i + \sum_i
 ## 4. Data and Preprocessing
 
 ### 4.1 Dataset
-- **Source:** HipMRI Study (`/home/groups/comp3710/HipMRI_Study_open`) — <38 patients, 211 volumes>
-- **Labels:** <body outline, bone, bladder, rectum, prostate>
-- **Input shape (after downsampling):** `<D x H x W>`
+- **Source:** HipMRI Study (`/home/groups/comp3710/HipMRI_Study_open`) — 38 patients, 211 volumes
+- **Labels:** `0: background, 1: body outline, 2: bone, 3: bladder, 4: rectum, 5: prostate`
+- **Input shape:** `(128, 256, 256)`
 - **Voxel spacing:** `<...>`
 
 ### 4.2 Preprocessing
 - **Intensity normalisation:** <e.g. per-volume z-score> — <justification and reference>
-- **Label encoding:** one-hot, <C> channels
-- **Resampling / downsampling:** <method and factor>
-- **Augmentation:** <flips, rotations, intensity shifts via ... > — <justification>
+- **Label encoding:** one-hot with 6 channels (labels)
+- **Resampling / downsampling:** 2D scans are cropped to 256x128 when necessary
 
 ### 4.3 Train / Validation / Test Split
-| Split      | Patients | Volumes |
-|------------|----------|---------|
-| Train      | <n>      | <n>     |
-| Validation | <n>      | <n>     |
-| Test       | <n>      | <n>     |
+A total of 211 scans across 38 patients was provided.
+
+| Split      | Proportion | Patients | Volumes |
+|------------|------------|----------|---------|
+| Train      | 0.80       |        |      |
+| Validation | 0.08       |         |       |
+| Test       | 0.12       |         |       |
 
 **Justification:** <Split is by patient, so all volumes from one patient are in a single split. State the ratio, seed, and why.>
 
 ---
 
-## 5. Setup and Reproducibility
+## 5. Setup
 
 ### 5.1 Dependencies
 | Package    | Version |
@@ -132,20 +168,38 @@ $$\mathcal{L}_{Dice} = 1 - \frac{2\sum_i p_i g_i + \epsilon}{\sum_i p_i + \sum_i
 | matplotlib | 3.11.1  |
 
 ### 5.2 Reproducibility
-- **Random seed:** `<42>`
-- **Hardware:** <GPU model, VRAM>
-- **Training settings:** optimiser `<...>`, LR `<...>`, batch size `<...>`, epochs `<...>`
-- <Note any non-determinism, e.g. cuDNN.>
+- **Random seed:** Where relevant, a `seed` of `67` was set for all stochastic processes on import for reproducibility.
+  - `torch.manual_seed(seed)` 
+  - `np.random.seed(seed)`
+  - `random.seed(seed)`
+  - `torch.cuda.manual_seed(seed)`
+- **Hardware:** Nvidia A100 on rangpur
+- **Training settings**
+  - ***2D Improved U-Net:***
+    - `batch_size = 75`
+    - `num_epochs = 28`
+    - `dropout = 0.23`
+    - `learning_rate = 0.001`
+    - `optimiser = torch.optim.Adam`
+    - `scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=num_epochs, eta_min=7e-5)`
+  - ***3D Improved U-Net:***
+    - `batch_size = 3`
+    - `num_epochs = `
+    - `dropout = `
+    - `learning_rate = `
+    - `optimiser = torch.optim.Adam`
+    - `scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=num_epochs, eta_min=)`
 
 ### 5.3 Repository Structure
 ```
-recognition/Improved_UNet_<studentID>/
-├── modules.py    # Model components (PyTorch only, no NumPy)
-├── dataset.py    # Data loading, patient-level splits, augmentation
-├── train.py      # Training, validation, testing, saving the model
-├── predict.py    # Inference and visualisation
-├── utils.py      # <Optional helpers: metrics, plotting>
-├── images/       # Figures used in this README
+recognition/Improved_UNet3D_46482239/
+├── modules.py      # Model definitions and loss functions
+├── dataset.py      # Data preprocessing, data loading, patient-level splits
+├── train.py        # Training, validation, and saving the model
+├── predict.py      # Inference and visualisation
+├── utils.py        # Plotting and data Audit
+├── audit_out/      # Path for data audit outputs
+├── images/         # Figures used in this README and from inference
 └── README.md
 ```
 
@@ -155,21 +209,17 @@ recognition/Improved_UNet_<studentID>/
 
 ```bash
 # Train
-python train.py --data_dir <path> --epochs <N> --batch_size <B> --save_path <path>
+python train.py --model <"3D" or "2D"> --epochs <N>
 
-# Predict and visualise
-python predict.py --data_dir <path> --weights <path> --out_dir <path>
+# Predict and run inference
+# Assumes .pth exists under <file>
+python predict.py --model <"3D" or "2D">
 ```
 
-| Argument     | Description           | Default |
-|--------------|-----------------------|---------|
-| `--data_dir` | <Path to HipMRI data> | <...>   |
-| `--epochs`   | <...>                 | <...>   |
-
-**Example input:** <describe a volume and its shape>  
-**Example output:** <describe the predicted label volume and files produced>
-
-> Model weights and datasets are **not** committed to the repository.
+| Argument   | Description                   | Default |
+|------------|-------------------------------|---------|
+| `--model`  | 2D or 3D Improved U-Net       | None    |
+| `--epochs` | Number of epochs to train for | 60      |
 
 ---
 
@@ -184,13 +234,21 @@ python predict.py --data_dir <path> --weights <path> --out_dir <path>
 *Figure 4: <Input, ground truth and prediction.>*
 
 ### 7.3 Test Set Performance
-| Class        | Dice      | IoU       |
-|--------------|-----------|-----------|
-| Body outline | <...>     | <...>     |
-| Bone         | <...>     | <...>     |
-| Bladder      | <...>     | <...>     |
-| Rectum       | <...>     | <...>     |
-| **Prostate** | **<...>** | **<...>** |
+| Class        | Dice Score (Aggregate) | Dice Score (Present) | Dice Score (Pooled) | IoU (Pooled) | FPR |
+|--------------|------------------------|----------------------|---------------------|--------------|-----|
+| Background   |                        |                      |                     |              |     |
+| Body outline | <...>                  |                      |                     | <...>        |     |
+| Bone         | <...>                  |                      |                     | <...>        |     |
+| Bladder      | <...>                  |                      |                     | <...>        |     |
+| Rectum       | <...>                  |                      |                     | <...>        |     |
+| **Prostate** | **<...>**              |                      |                     | **<...>**    |     |
+
+The aggregate dice scores are the dice scores across all slices, including the slices where the class of interest is
+absent; it includes the dice scores that predict the empty slices for the said class. On the other hand, the 
+'pooled' dice scores consider the aggregate scores across all the slices where the class of interest is present in the 
+ground truth mask. Likewise, the 'present' dice score is a mean of the dice scores of the slices where the class of
+interest is present in the ground truth masks.\
+`FPR` denotes the pixel-wise false positive rates.
 
 ---
 
@@ -202,11 +260,11 @@ python predict.py --data_dir <path> --weights <path> --out_dir <path>
 <Describe the baseline model(s): e.g. 2D U-Net, 2D Improved U-Net. State that all models use the **same test patients and metrics**. If 2D predictions are stacked into 3D for scoring, explain how.>
 
 ### 8.2 Quantitative Benchmarking
-| Model                 | Prostate Dice | Prostate IoU | Bladder Dice | Rectum Dice | <Other> |
-|-----------------------|---------------|--------------|--------------|-------------|---------|
-| 2D U-Net (baseline)   | <...>         | <...>        | <...>        | <...>       | <...>   |
-| 2D Improved U-Net     | <...>         | <...>        | <...>        | <...>       | <...>   |
-| **3D Improved U-Net** | <...>         | <...>        | <...>        | <...>       | <...>   |
+| Model                 | Prostate Dice Score (present) | Prostate Dice Score | Prostate IoU | FPR    | Dice Score (Aggregate) |
+|-----------------------|-------------------------------|---------------------|--------------|--------|------------------------|
+| 2D U-Net (baseline)   | <...>                         |                     | <...>        | <...>  | <...>                  |
+| 2D Improved U-Net     | 0.762                         | 0.867               | 0.766        | 0.0006 | 0.905                  |
+| **3D Improved U-Net** | <...>                         |                     | <...>        | <...>  | <...>                  |
 
 <Brief interpretation. State whether differences are likely meaningful given the test set size, e.g. report the spread across patients.>
 
@@ -250,14 +308,15 @@ For each case, include the multi-panel figure (image, ground truth, prediction, 
 
 ---
 
-## 10. Artificial Intelligence Usage Disclosure
+## 10. Generative AI Disclosure
 
-| Tool                  | Used for                                         | How I verified the output                                                 |
-|-----------------------|--------------------------------------------------|---------------------------------------------------------------------------|
-| <e.g. Claude>         | <e.g. explaining theory, debugging shape errors> | <e.g. unit tests on tensor shapes, compared against a hand-computed Dice> |
-| <e.g. GitHub Copilot> | <e.g. auto-complete in plotting code>            | <...>                                                                     |
-
-<Be specific. Note any AI suggestions you rejected or corrected.>
+| Tool              | Used for                             | Verification Processes                                                                                   |
+|:------------------|--------------------------------------|----------------------------------------------------------------------------------------------------------|
+| Claude Sonnet 5.5 | Explaining theory                    | Cross-reference with course material and other sources                                                   |
+| ...               | Subset-sum problem for patient split | Manual checks on split patient lists using pycharm's debug mode and asserts to detect duplicate patients |
+| ...               | Debugging OOM                        | Check training graph and inference results to ascertain the plausibility of results                      |
+| ...               | Debugging stdout buffering           | `cat log.out` and `cat log.err` to ensure training is happening                                          |
+| ...               | Report template                      | Cross-check with task sheet                                                                              |
 
 ---
 
