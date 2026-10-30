@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
 from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
+from predict import metrics_to_string, compute_metrics
 
 # ======================================================================================================================
 # =                                             Hyperparameter definitions                                             =
@@ -20,8 +21,6 @@ random.seed(67)
 torch.cuda.manual_seed(67)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", device.type)
-
 
 in_channels = 1 # Greyscale
 out_channels = len(LABELS)
@@ -41,16 +40,20 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def main():
+    print("Using device:", device.type)
     train_dataloader = get_dataloader_3d("train")
     validate_dataloader = get_dataloader_3d("validate")
-    losses = []
-    val_losses = []
-    accuracy_scores = []
-    val_accuracy_scores = []
+
+    training_losses = list()
+    validation_losses = list()
+    training_scores = list()
+    validation_scores = list()
+    unet_report_path = output_dir / r"unet_report.txt"
+    predictions_all, targets_all = list(), list()
+
     unet_report_train_temp = str()
     unet_report_validation_temp = str()
-    unet_report_test_temp = str()
-    unet_report_path = output_dir / r"unet_report.txt"
+
     print("Training...")
     start_time = time.time()
     training_times = list()
@@ -92,8 +95,8 @@ def main():
         unet_report_train_temp = unet_report_train_temp + f"\n"
 
         avg_loss = epoch_loss / len(train_dataloader)
-        losses.append(avg_loss)
-        accuracy_scores.append(1 - avg_loss)
+        training_losses.append(avg_loss)
+        training_scores.append(1 - avg_loss)
         out_str = f"\tAverage Loss: {avg_loss:.3f}"
 
         training_subtime_cum = time.time() - training_subtime_cum
@@ -121,6 +124,8 @@ def main():
                         torch.mean(dsc_per_class(outputs, val_masks), dim=0).reshape(-1, len(LABELS))
                     ]
                 )
+                predictions_all.append(outputs.argmax(1).to(torch.uint8).cpu())
+                targets_all.append(val_masks.argmax(1).to(torch.uint8).cpu())
 
             unet_report_validation_temp = unet_report_validation_temp + (f"Mean DSC per class for validation set at "
                                                                          f"epoch {epoch + 1}/{num_epochs}\n")
@@ -131,8 +136,8 @@ def main():
             unet_report_validation_temp = unet_report_validation_temp + f"\n"
         scheduler.step()
         avg_validation_loss = validation_loss / len(validate_dataloader)
-        val_losses.append(avg_validation_loss)
-        val_accuracy_scores.append(1 - avg_validation_loss)
+        validation_losses.append(avg_validation_loss)
+        validation_scores.append(1 - avg_validation_loss)
         out_str = out_str + (f" | Validation Loss: {avg_validation_loss:.3f}\t"
                              f"Time: {training_subtime:.3f}s\tTime Cum: {training_subtime_cum}")
         training_subtime_cum = time.time() - training_subtime_cum
@@ -151,15 +156,15 @@ def main():
 
     # Plot training loss vs validation loss
     fig, ax1 = plt.subplots(figsize=(700, 700, "px"))
-    ax1.plot(losses, color='tab:red', label='Training Loss')
-    ax1.plot(val_losses, color='tab:orange', label='Validation Loss')
+    ax1.plot(training_losses, color='tab:red', label='Training Loss')
+    ax1.plot(validation_losses, color='tab:orange', label='Validation Loss')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss', color='tab:red')
     ax1.tick_params(axis='y', labelcolor='tab:red')
 
     ax2 = ax1.twinx()
-    ax2.plot(accuracy_scores, color='tab:blue', label='Training DSC Score')
-    ax2.plot(val_accuracy_scores, color='tab:green', label='Validation DSC Score')
+    ax2.plot(training_scores, color='tab:blue', label='Training DSC Score')
+    ax2.plot(validation_scores, color='tab:green', label='Validation DSC Score')
     ax2.set_ylabel('DSC Score', color='tab:blue')
     ax2.tick_params(axis='y', labelcolor='tab:blue')
     fig.legend(loc="lower left")
@@ -169,6 +174,8 @@ def main():
     outpath = output_dir / r"3D UNET Segmentation Training Curve.png"
     fig.savefig(outpath)
     plt.show()
+
+    table = metrics_to_string(compute_metrics(torch.cat(predictions_all), torch.cat(targets_all)))
 
     # Write to file
     unet_report_str = str()
@@ -184,7 +191,7 @@ def main():
     unet_report_str = unet_report_str + unet_report_validation_temp
     unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
 
-    unet_report_str = unet_report_str + unet_report_test_temp
+    unet_report_str = unet_report_str + table
     unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
 
     unet_report_file = open(unet_report_path, "w")

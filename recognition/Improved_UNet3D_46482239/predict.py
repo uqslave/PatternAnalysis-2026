@@ -16,49 +16,87 @@ from pathlib import Path
 import math
 import argparse
 
+from torch import Tensor
 from torch.utils.data import DataLoader
-
 from dataset import LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D
 from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class
 
 # ======================================================================================================================
 # =                                               Score Summary Helpers                                                =
 # ======================================================================================================================
+def _one_hot(labels: Tensor, K: int) -> Tensor:
+    """
+    Converts [N, (D), H, W] to [N, K, (D), H, W]
+    :param labels: [N, (D), H, W] labels
+    :param K: Number of classes
+    :return: Mask with one-hot encoding
+    """
+    return F.one_hot(labels.long(), K).movedim(-1, 1).float()
+
+
 @torch.no_grad()
-def summarise_scores(predictions, targets):
-    dsc_scores = torch.Tensor().to(device)
+def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) -> dict[str, Tensor]:
+    """
+    Label maps [N, H, W] (2D) or [N, D, H, W] (3D). Called after processing every batch.
+    Evaluates:
+        DSC (+ empty),\n
+        DSC (present),\n
+        DSC (pooled),\n
+        IoU (pooled),\n
+        FPR (pooled),\n
+    Every value returned has shape [K].
+    :param predictions: Predictions
+    :param targets: Targets (Ground Truth)
+    :param K: Number of classes
+    :return: Evaluation metrics
+    """
+    pred_onehot, targ_onehot = _one_hot(predictions, K), _one_hot(targets, K)
+    present = targ_onehot.flatten(2).sum(2) > 0     # [N, K] class exists in the ground truth
 
-    predictions = torch.argmax(predictions, dim=1)  # Becomes [B, H, W]
-    predictions = F.one_hot(predictions, num_classes=len(LABELS)).permute(0, 3, 1, 2).float()  # Back to [B, K, H, W]
+    dsc = dsc_per_class(pred_onehot, targ_onehot)   # [N, K] per slice
+    dsc_wempty = dsc.mean(0)
+    dsc_present = (dsc * present).sum(0) / present.sum(0).clamp(min=1)
 
-    # Dice +empty slices
-    dsc_wempty = dsc_per_class(predictions, targets)  # [B, K]
+    # Change [N, K, dims] to [K, N, dims]
+    # Unsqueeze to make it [1, K, N, dims]. Now can be treated as a tensor with batch size of 1.
+    pred_onehot = pred_onehot.movedim(0, 1).unsqueeze(0)
+    targ_onehot = targ_onehot.movedim(0, 1).unsqueeze(0)
 
-    # Dice present slices
-    B, K = predictions.shape[:2]
-    tp = targets > 0
-    # 1. Find where each class is present in each batch item -> shape: [B, K]
-    has_class = tp.reshape(B, K, -1).any(dim=2)
-    # 2. Expand `has_class` back to match the spatial shape [B, K, H, W]
-    # (Assuming H, W are dimensions 2 and 3)
-    spatial_dims = predictions.shape[2:]
-    mask_expanded = has_class.view(B, K, *([1] * len(spatial_dims)))
-    # 3. Filter predictions: zero out everything where the class isn't present
-    filtered_predictions = predictions * mask_expanded.float()
-    wtf = targets > 0
+    dsc_pooled = dsc_per_class(pred_onehot, targ_onehot)[0]
+    iou_pooled = iou_per_class(pred_onehot, targ_onehot)[0]
+    pixel_fpr = fpr_per_class(pred_onehot, targ_onehot)[0]
 
-    # Dice pooled slices
-    huh = predictions[:, 5, :, :].unsqueeze(dim=1)
-    umm = targets[:, 5, :, :].unsqueeze(dim=1)
-    dsc_pooled = dsc_per_class(huh, umm)
+    return {
+        "n_present"         : present.sum(0),
+        "dsc_wempty"        : dsc_wempty,
+        "dsc_present"       : dsc_present,
+        "dsc_pooled"        : dsc_pooled,
+        "iou_pooled"        : iou_pooled,
+        "pixel_fpr"         : pixel_fpr
+    }
 
-    # IoU pooled
-    iou = iou_per_class(huh, umm)
 
-    # Empty FP rate
-    fpr = fpr_per_class(predictions, targets)
+def metrics_to_string(metrics: dict) -> str:
+    lines = [
+        f"{'class':<13}"
+        f"{'#present':>9}"
+        f"{'Dice(+empty)':>14}"
+        f"{'Dice(present)':>15}"
+        f"{'Dice(pooled)':>14}"
+        f"{'IoU(pooled)':>13}"
+        f"{'pixelFPR':>10}"
+    ]
+    for k, name in enumerate(LABELS):
+        lines.append(
+            f"{name:<13}"
+            f"{int(metrics['n_present'][k]):>9}"
+            f"{metrics['dsc_wempty'][k]:>14.3f}"
+            f"{metrics['dsc_present'][k]:>15.3f}"
+            f"{metrics['dsc_pooled'][k]:>14.3f}"
+            f"{metrics['iou_pooled'][k]:>13.3f}"
+            f"{metrics['pixel_fpr'][k]:>10.4f}")
+    return "\n".join(lines)
 
-    return dsc_wempty, dsc_pooled, iou, fpr
 
 # ======================================================================================================================
 # =                                               Inference (Test) Loop                                                =
@@ -78,35 +116,16 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
     fig_cum, axes_cum = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     fig_cum_diff, axes_cum_diff = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     four_colour_cmap = mpl.colormaps['jet'].resampled(len(LABELS))
-    dsc_scores1, dsc_scores2, dsc_scores3, dsc_scores4 = torch.Tensor().to(device),torch.Tensor().to(device),torch.Tensor().to(device),torch.Tensor().to(device)
-    unet_report_test_temp = ""
-
+    predictions_all, targets_all = list(), list()
 
     model.eval()
     for bidx, (test_images, test_masks) in enumerate(loader):
         test_images = test_images.to(device)
         test_masks = test_masks.to(device)
-
         predictions = model(test_images)
 
-        scores, dsc_pooled, iou, fpr = summarise_scores(predictions, test_masks)
-
-        dsc_scores1 = torch.cat([dsc_scores1, scores], 0)
-        dsc_scores2 = torch.cat([dsc_scores2, dsc_pooled], 0)
-        dsc_scores3 = torch.cat([dsc_scores3, iou], 0)
-        dsc_scores4 = torch.cat([dsc_scores4, fpr], 0)
-
-        # scores = dsc_per_class(predictions, test_masks)  # [B, K]
-        scores = torch.mean(scores, dim=0)
-        print(f"Test batch {bidx + 1}/{len(loader)} DSC Scores: ")
-        for name, s in zip(LABELS, scores):
-            print(f"{name}: {s:.4f}")
-        print("")
-
-        unet_report_test_temp = unet_report_test_temp + f"Mean DSC per class for test set batch {bidx + 1}/{len(loader)}\n"
-        for label, score in zip(LABELS, scores):
-            unet_report_test_temp = unet_report_test_temp + f"{label}: {score:.3f}\n"
-        unet_report_test_temp = unet_report_test_temp + f"\n"
+        predictions_all.append(predictions.argmax(1).to(torch.uint8).cpu())
+        targets_all.append(test_masks.argmax(1).to(torch.uint8).cpu())
 
         fig_main, axes_main = plt.subplots(3, len(LABELS), figsize=(1440, 900, "px"))
         sample_no = random.randint(0, len(test_masks) - 1)
@@ -176,17 +195,10 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
 
     plt.show()
 
-    unet_report_test_temp = unet_report_test_temp + f"--- Mean DSC per class across test set ---\n"
-    dsc_scores1 = torch.mean(dsc_scores1, dim=0)
-    dsc_scores2 = torch.mean(dsc_scores2, dim=0)
-    dsc_scores3 = torch.mean(dsc_scores3, dim=0)
-    dsc_scores4 = torch.mean(dsc_scores4, dim=0)
-    print(dsc_scores1, "\n", dsc_scores2, "\n", dsc_scores3, "\n", dsc_scores4)
-    for label, score in zip(LABELS, dsc_scores1):
-        unet_report_test_temp = unet_report_test_temp + f"{label}: {score:.3f}\n"
-    unet_report_test_temp = unet_report_test_temp + f"\n"
+    table = metrics_to_string(compute_metrics(torch.cat(predictions_all), torch.cat(targets_all)))
+    print(table)
 
-    return unet_report_test_temp
+    return "\n" + table + "\n"
 
 
 @torch.no_grad()
@@ -241,10 +253,6 @@ if __name__ == "__main__":
     # Write to file
     unet_report_str = str()
     divider_length = 100
-
-    # 1. Training set per epoch
-    # 2. Validation set per epoch
-    # 3. Testing set per batch and mean across set
 
     unet_report_str = unet_report_str + inference_result
     unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
