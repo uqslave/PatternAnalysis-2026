@@ -1,3 +1,4 @@
+import argparse
 import os
 import numpy as np
 import torch
@@ -6,6 +7,7 @@ import time
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from pathlib import Path
+
 from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
 from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
 from predict import metrics_to_string, compute_metrics
@@ -23,34 +25,38 @@ torch.cuda.manual_seed(SEED)
 # ======================================================================================================================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-in_channels = 1 # Greyscale
-out_channels = len(LABELS)
-dropout = 0.25
-model = ImprovedUnet3D(in_channels, out_channels, dropout)
-model = model.to(device)
+IN_CHANNELS = 1 # Greyscale
+OUT_CHANNELS = len(LABELS)
 
-num_epochs = 60
-learning_rate = 3.1e-4
-optimiser = torch.optim.Adam(model.parameters(), lr = learning_rate)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=1.2e-7)
-criterion = DiceCELoss(w=0.5)
-scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
+model_dir = Path("trained_model/")
+model_dir.mkdir(parents=True, exist_ok=True)
 
-output_dir = Path("audit_out/")
-output_dir.mkdir(parents=True, exist_ok=True)
+# Clear cache and reset peak stats before training
+torch.cuda.empty_cache()
+torch.cuda.reset_peak_memory_stats()
 
 
-def main():
-    print("Using device:", device.type)
-    train_dataloader = get_dataloader_3d("train")
-    validate_dataloader = get_dataloader_3d("validate")
-
+# ======================================================================================================================
+# =                                                    Train Model                                                     =
+# ======================================================================================================================
+def train_model(
+        model: ImprovedUnet | ImprovedUnet3D,
+        train_dataloader: torch.utils.data.DataLoader,
+        validate_dataloader: torch.utils.data.DataLoader,
+        num_epochs: int,
+        criterion: DiceCELoss,
+        optimiser,
+        scheduler,
+        scaler,
+        model_type: str
+):
     training_losses = list()
     validation_losses = list()
     training_scores = list()
     validation_scores = list()
-    unet_report_path = output_dir / r"unet_report.txt"
+    unet_report_path = model_dir / rf"unet_report_{model_type}.txt"
     predictions_all, targets_all = list(), list()
+    peak_vram_allocated = peak_vram_reserved = 0
 
     unet_report_train_temp = str()
     unet_report_validation_temp = str()
@@ -60,26 +66,34 @@ def main():
     training_times = list()
     training_subtime_cum = start_time
     for epoch in range(num_epochs):
-        # ==============================================================================================================
-        # =                                               Training Loop                                                =
-        # ==============================================================================================================
         training_subtime = time.time()
-        model.train()
         epoch_loss = validation_loss = 0
         losses_per_batch = torch.Tensor().to(device)
         losses_per_batch_temp = torch.Tensor().to(device)
+
+        # ==============================================================================================================
+        # =                                               Training Loop                                                =
+        # ==============================================================================================================
+        model.train()
         print(f"Epoch {epoch + 1}/{num_epochs}")
         for batch_idx, (images, masks) in enumerate(train_dataloader):
-            #print(f"\tBatch {batch_idx + 1}/{len(train_dataloader)}")
+            # print(f"\tBatch {batch_idx + 1}/{len(train_dataloader)}")
             images = images.to(device)
             masks = masks.to(device)
             with torch.autocast("cuda", dtype=torch.float16):
                 outputs = model(images)
                 loss = criterion(outputs, masks)
+
             scaler.scale(loss).backward()
             scaler.step(optimiser)
             scaler.update()
             optimiser.zero_grad()
+            peak_allocated = torch.cuda.max_memory_allocated() / (1024 ** 2)    # In MB
+            peak_reserved = torch.cuda.max_memory_reserved() / (1024 ** 2)      # In MB
+            if peak_allocated > peak_vram_allocated:
+                peak_vram_allocated = peak_allocated
+            if peak_reserved > peak_vram_reserved:
+                peak_vram_reserved = peak_reserved
 
             losses_per_batch = torch.cat(
                 [
@@ -107,11 +121,9 @@ def main():
         # ==============================================================================================================
         # =                                              Validation Loop                                               =
         # ==============================================================================================================
-        #print("\tPerforming Validation...")
         model.eval()
         with torch.no_grad():
             for batch_idx, (val_images, val_masks) in enumerate(validate_dataloader):
-                print(f"\tBatch {batch_idx + 1}/{len(validate_dataloader)}")
                 val_images = val_images.to(device)
                 val_masks = val_masks.to(device)
 
@@ -135,6 +147,7 @@ def main():
                 unet_report_validation_temp = unet_report_validation_temp + (f"{label}: "
                                                                              f"{losses_per_batch_temp[label_idx]:.3f}\n")
             unet_report_validation_temp = unet_report_validation_temp + f"\n"
+
         scheduler.step()
         avg_validation_loss = validation_loss / len(validate_dataloader)
         validation_losses.append(avg_validation_loss)
@@ -147,10 +160,14 @@ def main():
         del outputs, loss
         torch.cuda.empty_cache()
 
+    unet_report_metrics = ((f"Average time per epoch: {np.mean(training_times):.3f}s\n"
+                           + f"Peak VRAM allocated: {peak_vram_allocated} MB\n")
+                           + f"Peak VRAM reserved: {peak_vram_reserved} MB\n")
+    print(unet_report_metrics)
     # ==================================================================================================================
     # =                                          Save model & Training Plots                                           =
     # ==================================================================================================================
-    outpath = output_dir / f"unet_improved_3d.pth"
+    outpath = model_dir / fr"unet_improved_{model_type}.pth"
     torch.save(model.state_dict(), outpath)
     print(f"Saved checkpoint to {outpath}")
     print("")
@@ -170,9 +187,9 @@ def main():
     ax2.tick_params(axis='y', labelcolor='tab:blue')
     fig.legend(loc="lower left")
 
-    plt.title("UNET Segmentation Training Curve")
+    plt.title("U-Net Segmentation Training Curve")
     fig.tight_layout()
-    outpath = output_dir / r"3D UNET Segmentation Training Curve.png"
+    outpath = model_dir / fr"{model_type} UNET Segmentation Training Curve.png"
     fig.savefig(outpath)
     plt.show()
 
@@ -195,9 +212,53 @@ def main():
     unet_report_str = unet_report_str + table
     unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
 
+    unet_report_str = unet_report_str + unet_report_metrics
+    unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
+
     unet_report_file = open(unet_report_path, "w")
     unet_report_file.write(unet_report_str)
     unet_report_file.close()
 
+# ======================================================================================================================
+# =                                                     Main Guard                                                     =
+# ======================================================================================================================
+def main(argsv):
+    print("Using device:", device.type)
+    model_type = argsv.model
+    num_epochs = argsv.epochs
+
+    criterion = DiceCELoss(w=0.5)
+    scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
+
+    if model_type == "3D":
+        dropout = 0.31
+        learning_rate = 0.000434
+        model = ImprovedUnet3D(IN_CHANNELS, OUT_CHANNELS, dropout)
+        model = model.to(device)
+        optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=4.9e-8)
+
+        train_dataloader = get_dataloader_3d("train")
+        validate_dataloader = get_dataloader_3d("validate")
+        train_model(model, train_dataloader, validate_dataloader, num_epochs, criterion, optimiser, scheduler, scaler, model_type)
+    elif model_type == "2D":
+        dropout = 0.23
+        learning_rate = 0.0001
+        model = ImprovedUnet(IN_CHANNELS, OUT_CHANNELS, dropout_p = dropout)
+        model.to(device)
+        optimiser = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=num_epochs, eta_min=1.2e-5)
+
+        train_dataloader = get_dataloader_2d("train")
+        validate_dataloader = get_dataloader_2d("validate")
+        train_model(model, train_dataloader, validate_dataloader, num_epochs, criterion, optimiser, scheduler, scaler, model_type)
+    else:
+        raise ValueError(f"Invalid model type: {model_type}! Must be '3D' or '2D'.")
+
+
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", type = str, required = True)
+    ap.add_argument("--epochs", type = int, required = False, default = 80)
+    args = ap.parse_args()
+    main(args)
