@@ -1,4 +1,6 @@
 import os
+from os.path import exists
+
 import numpy as np
 import nibabel as nib
 import glob
@@ -18,6 +20,8 @@ if not os.path.exists(DATASET_PATH_2D):
     DATASET_PATH_2D = r"/home/groups/comp3710/HipMRI_Study_open/keras_slices_data"
     DATASET_PATH_3D = r"/home/groups/comp3710/HipMRI_Study_open"
 PROCESSED_PATH = r"./processed_npy"
+
+"""
 PROCESSED_NPY_2D = {
     os.path.join(PROCESSED_PATH, "2D", "raw_train.npy"),
     os.path.join(PROCESSED_PATH, "2D", "mask_train.npy"),
@@ -34,6 +38,7 @@ PROCESSED_NPY_3D = {
     os.path.join(PROCESSED_PATH, "3D", "raw_test.npy"),
     os.path.join(PROCESSED_PATH, "3D", "mask_test.npy"),
 }
+"""
 
 # Dictionary of tuples of raw, mask pairs for 2D
 DATASET_2D_TYPES = {
@@ -55,7 +60,7 @@ BATCH_SIZE_2D = {
     "test":     42,
 }
 BATCH_SIZE_3D = {
-    "train":    3,
+    "train":    4,
     "validate": 1,
     "test":     1,
 }
@@ -369,6 +374,7 @@ def nii_to_npy(data_split: str):
         mask_scans = load_data_3D(split_mask_files, categorical=True, dtype=np.uint8)
 
     # Save to npy
+    os.makedirs(os.path.join(PROCESSED_PATH, str(dataset_type)), exist_ok=True)
     np.save(os.path.join(PROCESSED_PATH, str(dataset_type), f"raw_{dataset_split}.npy"), raw_scans)
     np.save(os.path.join(PROCESSED_PATH, str(dataset_type), f"mask_{dataset_split}.npy"), mask_scans)
     print("Preprocessing & conversion complete!")
@@ -402,9 +408,11 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
             self.mask_files = np.load(os.path.join(PROCESSED_PATH, "3D", f"mask_{dataset}.npy"), mmap_mode='r')
         except FileNotFoundError:
             nii_to_npy(f"3D_{dataset}")
+            self.raw_files = np.load(os.path.join(PROCESSED_PATH, "3D", f"raw_{dataset}.npy"), mmap_mode='r')
+            self.mask_files = np.load(os.path.join(PROCESSED_PATH, "3D", f"mask_{dataset}.npy"), mmap_mode='r')
         assert len(self.raw_files) == len(self.mask_files), "Dataset mismatch in 3D split."
 
-        if abs(len(self.raw_files) - IMAGE_COUNT_3D[dataset]) > COUNT_3D_EPS:
+        if abs(1.0 - (len(self.raw_files) / IMAGE_COUNT_3D[dataset])) > COUNT_3D_EPS:
             # Should negate the need to manually run the nii_to_npy script whenever we want to change split ratios.
             print("3D Splits not correct; Re-processing splits to .npy files...")
             for d_set in {"train", "validate", "test"}:
@@ -429,8 +437,8 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
 
         # Better to use from_numpy() here since the masks are assigned an integer in sequential order.
         # for Conv3d, shapes per batch should be (B, 1, D, H, W) / (B, D, H, W) or similar
-        raw = torch.from_numpy(*raw_scan).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
-        mask = torch.from_numpy(*mask_scan).permute(3, 2, 0, 1).float()   # Becomes [K, D, H, W]
+        raw = torch.from_numpy(raw_scan).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
+        mask = torch.from_numpy(mask_scan).permute(3, 2, 0, 1).float()   # Becomes [K, D, H, W]
 
         if self.random_crop:  # True for train only
             _, D, H, W = raw.shape
@@ -456,19 +464,6 @@ class HipMRIDataset(torch.utils.data.Dataset):
         image_path = DATASET_2D_TYPES[dataset][0]
         mask_path = DATASET_2D_TYPES[dataset][1]
 
-        images = sorted(glob.glob(os.path.join(image_path, "*.nii*")))
-        masks = sorted(glob.glob(os.path.join(mask_path, "*.nii*")))
-
-        #X = load_data_2D(images, target_shape=(256, 144), normImage=True)
-        #Y = load_data_2D(masks, target_shape=(256, 144), categorical=True, num_classes=6, dtype=np.uint8)
-
-        # Sanity checks
-        # print(X.shape, Y.shape)
-        # first = Y[0][4]
-        # mid = Y[29][4]
-        # last = Y[59][4]
-        # print(0)
-
         # Need to load train, test, and validation sets for 2D
         # For 3D, we need to split it ourselves
         try:
@@ -476,6 +471,9 @@ class HipMRIDataset(torch.utils.data.Dataset):
             self.mask = np.load(os.path.join(PROCESSED_PATH, "2D", f"mask_{dataset}.npy"))
         except FileNotFoundError:
             nii_to_npy(f"2D_{dataset}")
+            self.raw = np.load(os.path.join(PROCESSED_PATH, "2D", f"raw_{dataset}.npy"))
+            self.mask = np.load(os.path.join(PROCESSED_PATH, "2D", f"mask_{dataset}.npy"))
+        assert len(self.raw) == len(self.mask), "Dataset mismatch in 2D split."
 
         self.label_values = range(6)    # 0 - Background,
                                         # 1 - Body outline,
