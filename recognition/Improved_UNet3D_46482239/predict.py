@@ -21,7 +21,9 @@ from torch.utils.data import DataLoader
 from dataset import LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D
 from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class
 
-
+# ======================================================================================================================
+# =                                               Score Summary Helpers                                                =
+# ======================================================================================================================
 @torch.no_grad()
 def summarise_scores(predictions, targets):
     dsc_scores = torch.Tensor().to(device)
@@ -58,8 +60,9 @@ def summarise_scores(predictions, targets):
 
     return dsc_wempty, dsc_pooled, iou, fpr
 
-
-
+# ======================================================================================================================
+# =                                               Inference (Test) Loop                                                =
+# ======================================================================================================================
 @torch.no_grad()
 def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.device, batch_size: int) -> str:
     """
@@ -201,6 +204,9 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
     return ""
 
 
+# ======================================================================================================================
+# =                                                     Main Guard                                                     =
+# ======================================================================================================================
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
