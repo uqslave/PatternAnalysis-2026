@@ -425,13 +425,13 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
         return len(self.raw_files)
 
     def __getitem__(self, index: int):
-        raw_scan = np.load(self.raw_files[index])
-        mask_scan = np.load(self.mask_files[index])
+        raw_scan = np.load(self.raw_files[index], mmap_mode="r")
+        mask_scan = np.load(self.mask_files[index], mmap_mode="r")
 
         # Better to use from_numpy() here since the masks are assigned an integer in sequential order.
         # for Conv3d, shapes per batch should be (B, 1, D, H, W) / (B, D, H, W) or similar
-        raw = torch.from_numpy(raw_scan).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
-        mask = torch.from_numpy(mask_scan).permute(3, 2, 0, 1).float()   # Becomes [K, D, H, W]
+        raw = torch.from_numpy(raw_scan.copy()).permute(2, 0, 1).unsqueeze(0)   # Becomes [1, D, H, W]
+        mask = torch.from_numpy(mask_scan.copy()).permute(3, 2, 0, 1).float()   # Becomes [K, D, H, W]
 
         if self.random_crop:  # True for train only
             _, D, H, W = raw.shape
@@ -483,8 +483,8 @@ class HipMRIDataset(torch.utils.data.Dataset):
         return len(self.raw_files)
 
     def __getitem__(self, index: int):
-        raw_scan = np.load(self.raw_files[index])
-        mask_scan = np.load(self.mask_files[index])
+        raw_scan = np.load(self.raw_files[index], mmap_mode="r")
+        mask_scan = np.load(self.mask_files[index], mmap_mode="r")
 
         # Better to use from_numpy() here since the masks are assigned an integer in sequential order.
         raw_image = torch.from_numpy(raw_scan)
