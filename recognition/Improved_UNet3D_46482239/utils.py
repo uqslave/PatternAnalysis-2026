@@ -15,12 +15,19 @@ from dataset import SEED, LABELS
 
 
 torch.manual_seed(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 
-output_dir = Path("audit_out/")
-output_dir.mkdir(parents=True, exist_ok=True)
 
-
+# ======================================================================================================================
+# =                                                 Reporting Helpers                                                  =
+# ======================================================================================================================
 def write_report(out_path: Path, metrics: tuple):
+    """
+    Write report to a txt file
+    :param out_path: Path/dir to save the .txt report
+    :param metrics: The metrics to write into the report
+    """
     report = str()
     divider_length = 100
 
@@ -29,12 +36,24 @@ def write_report(out_path: Path, metrics: tuple):
         report = report + "=" * divider_length + "\n\n"
 
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    unet_report_file = open(out_path, "w")
-    unet_report_file.write(report)
-    unet_report_file.close()
+    report_file = open(out_path, "w")
+    report_file.write(report)
+    report_file.close()
 
 
-def plot_training(outpath: Path, t_loss: list[float], v_loss: list[float], t_score: list[float], v_score: list[float]):
+# ======================================================================================================================
+# =                                                  Plotting Helpers                                                  =
+# ======================================================================================================================
+def plot_training(out_path: Path, t_loss: list[float], v_loss: list[float], t_score: list[float], v_score: list[float]):
+    """
+    Plot training loss vs validation loss and training dice scores vs validation dice scores.
+    :param out_path: Path/dir to save the plot
+    :param t_loss: Training losses
+    :param v_loss: Validation losses
+    :param t_score: Training dice scores
+    :param v_score: Validation dice scores
+    """
+
     # Plot training loss vs validation loss
     fig, ax1 = plt.subplots(figsize=(700, 700, "px"))
     ax1.plot(t_loss, color='tab:red', label='Training Loss')
@@ -43,6 +62,7 @@ def plot_training(outpath: Path, t_loss: list[float], v_loss: list[float], t_sco
     ax1.set_ylabel('Loss', color='tab:red')
     ax1.tick_params(axis='y', labelcolor='tab:red')
 
+    # Plot training dice score vs validation dice score
     ax2 = ax1.twinx()
     ax2.plot(t_score, color='tab:blue', label='Training DSC Score')
     ax2.plot(v_score, color='tab:green', label='Validation DSC Score')
@@ -53,11 +73,25 @@ def plot_training(outpath: Path, t_loss: list[float], v_loss: list[float], t_sco
     plt.title("U-Net Segmentation Training Curve")
     fig.tight_layout()
 
-    fig.savefig(outpath)
+    fig.savefig(out_path)
     plt.show()
 
 
 def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device, loader_len: int, batch_size: int):
+    """
+    Visualisation of the inference results for the 2D Improved U-Net segmentation model.
+    Incl:
+        predicted segmentation of a random slice from each batch,
+        cumulative error between ground truth and prediction masks for each of the random slices.
+        ground truth vs predicted masks for each of the classes for each of the random slice from each batch + error.
+    :param results: Ground truth and predicted masks for each batch
+    :param device: CUDA or CPU
+    :param loader_len: length of the dataloader
+    :param batch_size: Batch size
+    """
+    output_dir = Path("images/")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     fig_cum_cols = 4
     fig_cum_rows = int(math.ceil(loader_len / fig_cum_cols))
     fig_cum, axes_cum = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
@@ -136,6 +170,9 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     plt.close()
 
 
+# ======================================================================================================================
+# =                                                   Helper Objects                                                   =
+# ======================================================================================================================
 class VRAMTracker:
     def __init__(self):
         self.peak_allocated = list()
@@ -182,11 +219,6 @@ class DataAudit:
         self.patient_count          = dict()
         self.to_csv = None
 
-        # Data loader are post-split
-        #self.train_dataloader = dataset.get_dataloader_3d("train")
-        #self.validate_dataloader = dataset.get_dataloader_3d("validate")
-        #self.test_dataloader = dataset.get_dataloader_3d("test")
-
     def __repr__(self) -> str:
         if self.to_csv is None:
             raise "Data audit not yet evaluated!"
@@ -198,7 +230,11 @@ class DataAudit:
         return self.__repr__()
 
     def evaluate(self):
+        """
+        Performs the data audit
+        """
         assert len(self.image_files) == len(self.mask_files), "Data Mismatch!"
+
         patient_ids = list()
         raw_file_names, mask_file_names = list(), list()
         patient_count = dict()
@@ -206,7 +242,7 @@ class DataAudit:
             raw_file_name, mask_file_name = self.image_files[index].split("\\")[-1], self.mask_files[index].split("\\")[-1]
             raw_file_names.append(raw_file_name)
             mask_file_names.append(mask_file_name)
-            patient_id = raw_file_name.split("_")[0]
+            patient_id = raw_file_name.split("_")[0]    # Extracts the patient id from the file name
             patient_ids.append(patient_id)
             patient_count[patient_id] = patient_count.get(patient_id, 0) + 1
 
@@ -249,7 +285,6 @@ class DataAudit:
         self.mask_file_names        = mask_file_names
         self.patient_count          = patient_count
 
-        # Ceebs changing it
         data = {
             "patient_id":               self.patient_ids,           # 0
             "raw_file_name":            self.raw_file_names,        # 1
@@ -261,8 +296,14 @@ class DataAudit:
             "mask_channels_present":    self.mask_channels_present, # 7
         }
         self.to_csv = pd.DataFrame(data)
+        output_dir = Path("audit_out/")
+        output_dir.mkdir(parents=True, exist_ok=True)
         self.to_csv.to_csv(output_dir / "data_audit.csv", index=True)
 
+
+# ======================================================================================================================
+# =                                                     Main Guard                                                     =
+# ======================================================================================================================
 if __name__ == "__main__":
     audit = DataAudit()
     audit.evaluate()
