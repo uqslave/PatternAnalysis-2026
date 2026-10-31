@@ -5,7 +5,7 @@ import random
 import time
 from pathlib import Path
 
-from dataset import SEED, LABELS, get_dataloader_2d, get_dataloader_3d
+from dataset import SEED, LABELS, get_dataloader_2d, get_dataloader_3d, verify_splits
 from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
 from predict import metrics_to_string, compute_metrics
 from utils import VRAMTracker, plot_training, write_report
@@ -191,7 +191,6 @@ def train_model(
     write_report(unet_report_path, report_metrics)
 
 
-
 # ======================================================================================================================
 # =                                                     Main Guard                                                     =
 # ======================================================================================================================
@@ -234,4 +233,5 @@ if __name__ == "__main__":
     ap.add_argument("--model", type = str, required = True)
     ap.add_argument("--epochs", type = int, required = False, default = 80)
     args = ap.parse_args()
+    verify_splits(args.model)   # We don't need to care about this since we're re-training with (new) splits anyway
     main(args)

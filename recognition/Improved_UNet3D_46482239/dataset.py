@@ -358,8 +358,8 @@ def nii_to_npy(data_split: str):
         print(f"Processing 3D {dataset_split} split...")
         split_raw_files, split_mask_files = [], []
         for patient_id in patient_ids:
-            split_raw_files.extend(sorted(glob.glob(DATASET_3D_TYPES["raw"] + rf"{patient_id}*.nii*")))
-            split_mask_files.extend(sorted(glob.glob(DATASET_3D_TYPES["mask"] + rf"{patient_id}*.nii*")))
+            split_raw_files.extend(sorted(glob.glob(DATASET_3D_TYPES["raw"] + rf"{patient_id}_*.nii*")))
+            split_mask_files.extend(sorted(glob.glob(DATASET_3D_TYPES["mask"] + rf"{patient_id}_*.nii*")))
 
         raw_scans = load_data_3D(split_raw_files, normImage=True)
         mask_scans = load_data_3D(split_mask_files, categorical=True, dtype=np.uint8)
@@ -374,6 +374,55 @@ def save_npy(raws, masks, save_path):
         mask = masks[index]
         np.save(os.path.join(save_path, f"raw_{index}.npy"), raw)
         np.save(os.path.join(save_path, f"mask_{index}.npy"), mask)
+
+
+def verify_splits(datatype: str) -> bool:
+    """
+    Verify the splits have been conducted and are correct.
+    Must be run whenever we want to load data.
+    :param datatype: 2D or 3D
+    :return: Are the splits correct?
+    """
+    if datatype not in {"2D", "3D"}:
+        raise ValueError("Datatype not recognised!")
+
+    datasets = ("train", "validate", "test")
+    for data in datasets:
+        path = os.path.join(PROCESSED_PATH, datatype, data)
+        if not os.path.exists(path):
+            print(f"{datatype} {data} split does not exist!\nProcessing splits...")
+            perform_split(datatype, data)
+        raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
+        mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
+        assert len(raw_files) == len(mask_files), f"Dataset mismatch in {datatype} split."
+
+        # Check if current split proportions matches what is defined in the code.
+        # Should negate the need to manually run the nii_to_npy script whenever we want to change split ratios.
+        if datatype == "3D":
+            condition = abs(1.0 - (len(raw_files) / IMAGE_COUNT_3D[data])) > COUNT_3D_EPS
+        else:
+            condition = False   # 2D splits have been done for us; No need to check.
+        if condition:
+            print(f"{datatype} Splits not correct!\nRe-processing splits...")
+            perform_split(datatype)
+            return False
+    return True
+
+
+def perform_split(datatype: str, data_set: str | None = None) -> None:
+    """
+    Converts the dataset into .npy files or update the files and splits.
+    :param datatype: 2D or 3D
+    :param data_set: Train, Validation, or Test
+    """
+    print("Splitting to .npy files...")
+    if data_set is None:
+        for d_set in SPLIT.keys():
+            nii_to_npy(f"{datatype}_{d_set}")
+    elif data_set is not None and data_set in {"train", "validate", "test"}:
+        nii_to_npy(f"{datatype}_{data_set}")
+    else:
+        raise ValueError("Dataset not recognised!")
 
 
 # ======================================================================================================================
@@ -400,22 +449,8 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
         self.patient_ids = SPLIT[dataset]
 
         path = os.path.join(PROCESSED_PATH, "3D", dataset)
-        if os.path.exists(path):
-            self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
-            self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
-        else:
-            nii_to_npy(f"3D_{dataset}")
-            self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
-            self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
-        assert len(self.raw_files) == len(self.mask_files), "Dataset mismatch in 3D split."
-
-        if abs(1.0 - (len(self.raw_files) / IMAGE_COUNT_3D[dataset])) > COUNT_3D_EPS:
-            # Should negate the need to manually run the nii_to_npy script whenever we want to change split ratios.
-            print("3D Splits not correct; Re-processing splits to .npy files...")
-            for d_set in SPLIT.keys():
-                nii_to_npy(f"3D_{d_set}")
-            self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
-            self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
+        self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
+        self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
 
         self.label_values = range(6)    # 0 - Background,
                                         # 1 - Body outline,
@@ -461,14 +496,8 @@ class HipMRIDataset(torch.utils.data.Dataset):
         # Need to load train, test, and validation sets for 2D
         # For 3D, we need to split it ourselves
         path = os.path.join(PROCESSED_PATH, "2D", dataset)
-        if os.path.exists(path):
-            self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
-            self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
-        else:
-            nii_to_npy(f"2D_{dataset}")
-            self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
-            self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
-        assert len(self.raw_files) == len(self.mask_files), "Dataset mismatch in 2D split."
+        self.raw_files = sorted(glob.glob(os.path.join(path, "raw_*.npy")))
+        self.mask_files = sorted(glob.glob(os.path.join(path, "mask_*.npy")))
 
         self.label_values = range(6)    # 0 - Background,
                                         # 1 - Body outline,
@@ -527,6 +556,7 @@ def get_dataloader_3d(dataset: str) -> DataLoader:
 # ======================================================================================================================
 if __name__ == "__main__":
     # Sanity checks
+    verify_splits("3D")
     train_dataset = HipMRI3DDataset("validate")
     train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
 
