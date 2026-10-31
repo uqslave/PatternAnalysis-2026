@@ -185,7 +185,7 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
         predictions_all.append(predictions)
         targets_all.append(target)
 
-    plot_3d_inference(results, device, len(loader), batch_size)
+    plot_3d_inference(results, device, len(loader))
     metrics = compute_metrics(torch.cat(predictions_all), torch.cat(targets_all))
     table = metrics_to_string(metrics)
     print(table)
