@@ -41,6 +41,8 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
         IoU (pooled),\n
         FPR (pooled),\n
         FNR (pooled),\n
+        Precision,
+        Recall
     Every value returned has shape [K].
     :param predictions: Predictions
     :param targets: Targets (Ground Truth)
@@ -51,7 +53,6 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
     present = targets.flatten(2).sum(2) > 0     # Flattens to [N, K, dims] then sum to get tensor of shape [N, K]
                                                 # Like creating a mask to only filter out scores where the class of
                                                 # interest exists in the ground truth
-
     dsc = dsc_per_class(predictions, targets)   # [N, K] per slice
     dsc_wempty = dsc.mean(0)
     dsc_present = (dsc * present).sum(0) / present.sum(0).clamp(min=1)
