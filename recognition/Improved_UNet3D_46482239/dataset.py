@@ -556,6 +556,9 @@ def get_dataloader_3d(dataset: str) -> DataLoader:
 # ======================================================================================================================
 if __name__ == "__main__":
     # Sanity checks
+    for k, v in SPLIT.items():
+        print(f"Patients in {k} split: {sum(Counter(v).values())}")
+
     verify_splits("3D")
     train_dataset = HipMRI3DDataset("validate")
     train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
