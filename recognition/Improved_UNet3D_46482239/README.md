@@ -30,7 +30,7 @@ Improved U-Net with the same kind of residual connections and deep supervision b
 volumetric context soothes boundary errors at the prostate base and apex.
 
 ![Headline figure](images/headline_figure.png)
-*Figure 1: Sample segmentation featuring the (a) input, (b) ground truth, and (c) prediction overlay*
+*Figure 1: Sample segmentation featuring the (a) input, (b) ground truth, and (c) prediction overlay; produced by the 2D improved U-Net*
 
 ---
 
@@ -44,8 +44,8 @@ since training a 3D segmentation model will up many times more the computation r
 - **Acceptance criteria (3–5, testable):**
   1. Prostate Dice Score (present) ≥ 0.70 on unseen test set;
   2. Prostate IoU Score (present) ≥ 0.70 on unseen test set;
-  3. Peak GPU VRAM ≤ 35 GiB during training;
-  4. Inference time ≤ 30 s per volume on A100;
+  3. Peak GPU VRAM allocation ≤ 35 GiB during training;
+  4. Inference time ≤ 1 s per volume on A100;
   5. No data leaks by ensuring patient-level splits. We can gauge this using ‘assert’ in code.
 
 ### 2.2 Model Choice and Course Concepts
@@ -69,7 +69,7 @@ level.
 | Patient Count                | 38                                                                                                         |
 | Image Dimensions/shape       | All scans are `(256, 256, 128)` in $H$, $W$, $D$                                                           |
 | Patient ID format            | All file names are in the format of `LNNN_WeekX_LFOV/SEMANTIC.nii.gz`<br/>Ex. `B010_Week3_SEMANTIC.nii.gz` |
-| 2D Improved U-Net VRAM usage |                                                                                                            |
+| 2D Improved U-Net VRAM usage | 1.67 GB                                                                                                    |
 
 
 ### 2.4 Risks, Budget and Fallback
@@ -85,14 +85,14 @@ level.
 
 ## 3. Network Architecture
 
-> Explain the working principles (this is worth 5 marks). Aim for clarity over length.
-
 ### 3.1 U-Net Backbone
 Simply put, a U-Net is an autoencoder-like network. But, unlike autoencoders, U-Nets are supervised and feature
 skip connections that transfer information between the encoder and the decoder of the same resolution. This skip 
 connection is what mitigates the loss of information (preserves spatial detail) as it gets downsampled in the encoders 
 and passes through the (bottleneck) latent layer.
+
 ![Architecture diagram](images/unet.png)\
+
 *Figure 2: Architecture of a U-Net*
 
 The role of the encoder is to extract abstract features of an input. In the middle, the bottleneck holds the most abstract, highest-
@@ -117,7 +117,9 @@ accompanied by an illustration featured in Figure 3 below.
 | leaky ReLU             | Introduces a small slope on the negative side.                                                                                                | Ensures a small gradient still flows back during backpropagation; doesn't kill neurons.                                                                                                                                             |
 | Instance normalisation | normalises each channel of each sample independently across its spatial dimensions.                                                           | Allows for smaller batch sizes to save on VRAM usage since its outputs don’t depend on the batch                                                                                                                                    |
 
+
 ![Architecture diagram](images/improved_unet.png)\
+
 *Figure 3: Architecture of an improved U-Net [2]*
 
 ### 3.3 Loss Function
@@ -147,22 +149,24 @@ Implementation of these loss functions can be found in modules.py
 - **Volume size:** $\text{~}256 \text{ MB}$ depending of precision
   - Made up of `256x256x128`voxels ($8,388,608\text{ voxels}$)
   - Each volume loaded into float32 tensors/arrays $32\times 8,388,608=256 \text{ MB}$
+  - For training, we take sub-voxels (patches) of the 3D scan to save on memory cost. The specific ratios is assigned to the `PATCH` variable in the `HipMRI3DDataset` class in `dataset.py`
 
 ### 4.2 Preprocessing
 - **Splits:** Patient level splits according to the proportions listed in section 4.3
 - **Label encoding:** One-hot with 6 channels (labels)
 - **Resampling / downsampling:** 2D scans are cropped to `256x128` when necessary
+- **Data loading:** The 3D `.nii.gz` files were converted to `.npy` files (under `./processed_npy/`) to speed up data loading during training and inference
 
 ### 4.3 Train / Validation / Test Split
 A total of 211 scans across 38 patients was provided.
 
 *Table 4: Split proportions of the 3D dataset*
 
-| Split      | Proportion | Patients | Volumes |
-|------------|------------|----------|---------|
-| Train      | 0.9052     |          |         |
-| Validation | 0.0521     |          |         |
-| Test       | 0.0427     | 2        | 9       |
+| Split      | Patients | Volumes | Proportion |
+|------------|----------|---------|------------|
+| Train      | 32       | 191     | 0.9052     |
+| Validation | 4        | 11      | 0.0521     |
+| Test       | 2        | 9       | 0.0427     |
 
 The data is split in accordance to the ratios defined by the 2D MRI scans below:
 - **Train:** $11,460 / 12,660 \approx 90.52\%$
@@ -193,18 +197,18 @@ The data is split in accordance to the ratios defined by the 2D MRI scans below:
 - **Training settings**
   - ***2D Improved U-Net:***
     - `batch_size = 75`
-    - `num_epochs = 28`
+    - `num_epochs = 40`
     - `dropout = 0.23`
     - `learning_rate = 0.001`
     - `optimiser = torch.optim.Adam`
     - `scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=num_epochs, eta_min=7e-5)`
   - ***3D Improved U-Net:***
     - `batch_size = 3`
-    - `num_epochs = `
-    - `dropout = `
-    - `learning_rate = `
+    - `num_epochs = 80`
+    - `dropout = 0.31`
+    - `learning_rate = 0.0001`
     - `optimiser = torch.optim.Adam`
-    - `scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=num_epochs, eta_min=)`
+    - `scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(T_max=num_epochs, eta_min=1.2e-5)`
 
 ### 5.3 Repository Structure
 ```
@@ -213,8 +217,7 @@ recognition/Improved_UNet3D_46482239/
 ├── dataset.py      # Data preprocessing, data loading, patient-level splits
 ├── train.py        # Training, validation, and saving the model
 ├── predict.py      # Inference and visualisation
-├── utils.py        # Plotting and data Audit
-├── audit_out/      # Path for data audit outputs
+├── utils.py        # Data audit, plotting helpers, and report helpers
 ├── images/         # Figures used in this README and from inference
 └── README.md
 ```
@@ -242,31 +245,72 @@ python predict.py --model <"3D" or "2D">
 ## 7. Results
 
 ### 7.1 Training Curves
-![Loss and Dice curves](images/training_curves.png)
-*Figure 4: <Training and validation loss and Dice per epoch.>*
+
+![Loss and Dice curves](images/training_curve.png)
+
+*Figure 4: Training and validation DiceCE loss and DiceCE scores per epoch*
+
+Throughout the whole training segment, Figure 4 shows that both the validation and training curves exhibited erratic 
+behaviour, with both eventually soothing out near the end. Such behaviour is indicative of a learning rate higher than what is suitable. This 
+is supported by the shape of the curves at the end, where the `CosineAnnealingLRScheduler` has reduced the learning rate
+to a comparatively smaller value of 1.2e-5. Pairing this with the smoothing curves near the end confirms this theory.
+Moreover, if we examine the training and validation loss and Dice Scores (DSC) in Figure 4 again, we actually find that 
+the mean losses from the validation set is consistently below that of the training lost for the entire training segment.
+Initial inspection may lead us to believe that this phenomenon is a good sign; during training we employed patch scaling
+on the training dataset that may reduce the volume shy of 30% of the original size, and we also used a relatively high 
+dropout of 31%. The training parameters forced the network to learn from volumes where the foreground and 
+organ locations vary with every volume. Conversely, during validation we fed the network whole consistent volumes, which could 
+be why the training losses are consistently marginally higher.
 
 ### 7.2 Example Predictions
-![Predictions](images/predictions.png)
-*Figure 5: <Input, ground truth and prediction.>*
+Figure 5 illustrates the predictions for volume 1 of the test set, where it produced a scatter of the points in the 3D 
+scan that was wrongly predicted. It is immediately clear (from Figure 5), that the majority of errors in predictions lie 
+on the boundaries of each class, for it is where the scan outlines from the raw files may be murky; the error points 
+produce a silhouette of the class.
+
+
+![Predictions](images/volume_scatter.png)
+
+*Figure 5: False positives and false negatives for each class for volume 1 (not to scale)*
+
+Likewise, a more intuitive visualisation can be seen below in.
 
 ### 7.3 Test Set Performance
 *Table 6: Inference results with unseen test set*
 
-| Class        | Dice Score (Aggregate) | Dice Score (Present) | Dice Score (Pooled) | IoU (Pooled) | FPR |
-|--------------|------------------------|----------------------|---------------------|--------------|-----|
-| Background   |                        |                      |                     |              |     |
-| Body outline | <...>                  |                      |                     | <...>        |     |
-| Bone         | <...>                  |                      |                     | <...>        |     |
-| Bladder      | <...>                  |                      |                     | <...>        |     |
-| Rectum       | <...>                  |                      |                     | <...>        |     |
-| **Prostate** | **<...>**              |                      |                     | **<...>**    |     |
+| Class        | Dice Score | Dice Score<br/>(Present) | Dice Score<br/>(Pooled) | IoU<br/>(Pooled) | FPR    | FNR    | Precision | Recall |
+|--------------|------------|--------------------------|-------------------------|------------------|--------|--------|-----------|--------|
+| Background   | 0.995      | 0.995                    | 0.995                   | 0.990            | 0.0005 | 0.0099 | 0.9997    | 0.9901 |
+| Body outline | 0.980      | 0.980                    | 0.980                   | 0.961            | 0.0124 | 0.0169 | 0.9769    | 0.9831 |
+| Bone         | 0.916      | 0.916                    | 0.917                   | 0.846            | 0.0049 | 0.0491 | 0.8849    | 0.9509 |
+| Bladder      | 0.925      | 0.825                    | 0.836                   | 0.883            | 0.0006 | 0.0069 | 0.8883    | 0.9931 |
+| Rectum       | 0.832      | 0.832                    | 0.836                   | 0.718            | 0.0003 | 0.1363 | 0.8092    | 0.8637 |
+| **Prostate** | 0.833      | 0.833                    | 0.833                   | 0.714            | 0.0002 | 0.1249 | 0.7955    | 0.8751 |
+
+
+The scores in Table 6 resolves the disparity introduced in section 7.1, where we saw in Figure 4 that the validation 
+loss curve consistently sat below the training curve. Underfitting was also a possible reason, but Table 6 confirm that our network
+is in fact learning to an adequate standard.
 
 The aggregate dice scores are the dice scores across all slices, including the slices where the class of interest is
 absent; it includes the dice scores that predict the empty slices for the said class. On the other hand, the 
 'pooled' dice scores consider the aggregate scores across all the slices where the class of interest is present in the 
 ground truth mask. Likewise, the 'present' dice score is a mean of the dice scores of the slices where the class of
-interest is present in the ground truth masks.\
-`FPR` denotes the pixel-wise false positive rates.
+interest is present in the ground truth masks.
+
+Immediately, it can be said that the dice scores in the 3D network was more consistent. This is to be expected since our 
+test volumes all featured the complete anatomy of the hip in one tensor, which means that we expect the dice scores 
+across the whole volume to be consistent. Moving on to the other metrics, we can see in Table 6 that the FPR is
+exceptionally small, but this may primarily be due to the excessive voxels that is taken up by the foreground. Similarly,
+the FNR provides a clearer insight. We can tell from the FNR (and Recall) that our network is able to accurately predict
+the voxels in the ground truth over 87% of the time. Conversely, the precision score tells us that our network may have 
+trouble distinguishing smaller organs (like the prostate) with unclear boundaries against other classes. At times, it 
+can be suspected that the network would 'pad' the segmentation of the prosate -- i.e. predict that the silhouette is 
+slightly larger than the ground truth, which makes it falsly predict the borders of an adjacent class is part of the 
+prostate.
+
+Overall, our network seems to have produced commendable results, and we have met the requirement of achieving dice scores
+greater than 0.7.
 
 ---
 
@@ -278,14 +322,25 @@ interest is present in the ground truth masks.\
 The base model is a 2D improved U-Net with the same kind of residual connections and deep supervision.
 
 ### 8.2 Benchmark Against Base Model
-*Table 6: Inference results against baseline*
+*Table 7: Inference results against baseline*
 
-| Model                 | Prostate Dice Score (present) | Prostate Dice Score | Prostate IoU | FPR    | Dice Score (Aggregate) |
-|-----------------------|-------------------------------|---------------------|--------------|--------|------------------------|
-| 2D Improved U-Net     | 0.762                         | 0.867               | 0.766        | 0.0006 | 0.905                  |
-| **3D Improved U-Net** | <...>                         |                     | <...>        | <...>  | <...>                  |
+| Model                 | Dice Score | Dice Score (present) | Dice Score<br/>(pooled) | IoU<br/>(pooled) | FPR    | FNR    | Precision | Recall |
+|-----------------------|------------|----------------------|-------------------------|------------------|--------|--------|-----------|--------|
+| 2D Improved U-Net     | 0.905      | 0.762                | 0.867                   | 0.766            | 0.0006 | 0.0986 | 0.8357    | 0.9014 |
+| **3D Improved U-Net** | 0.833      | 0.833                | 0.833                   | 0.714            | 0.0002 | 0.1249 | 0.7955    | 0.8751 |
 
-<Brief interpretation. State whether differences are likely meaningful given the test set size, e.g. report the spread across patients.>
+Table 7 compares the dice scores from the 3D variant of the improved U-Net to the 2D version. In section 7.3, an 
+explanation to why the dice scores for the 3D test set was more or less similar was given. Conversely, for the 2D 
+network, the scans were separated into slices along the depth (apex to base), which meant that the prostate was absent 
+on many slices. It is expected that such inconsistencies will create a bias where the network will be more inclined to 
+predict classes that hold a greater presence across the whole set. Hence, it would be expected that even on slices where
+the prostate is present in the ground truth, the network would still hold this bias in the predictions. This would
+explain the sudden drop in dice score when we filter out masks that don't contain the prostate. On the other hand, we can
+see in Table 7 that the 2D network has a better precision and recall. The 2D network was able to accurately predict over
+90% of the prostate corresponding ground truth. However, seeing that the dice score on present slices is considerably 
+lower than the precision and recall, it suggests that the  precision and recall for the 2D network are slightly inflated
+by the background. Comparing this to the 3D network, where the metrics are more consistent throughout, it leads us to 
+believe that the 3D model can provide a better segmentation.
 
 ### 8.3 Where Does Context Help? (Slice-wise Analysis)
 ![Dice by slice position](images/dice_by_slice.png)
@@ -296,13 +351,19 @@ The base model is a 2D improved U-Net with the same kind of residual connections
 ### 8.4 Resource Profiling
 *Table 7: Resource usage during training*
 
-| Model             | Parameters | Peak VRAM (GB) | Training time | Inference time / volume |
-|-------------------|------------|----------------|---------------|-------------------------|
-| 2D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
-| 3D Improved U-Net | <...>      | <...>          | <...>         | <...>                   |
+| Model             | Parameters | Approx size in FP32 (MB) | Peak VRAM Allocated (GB) | Peak VRAM Reserved (GB) | Training time | Mean Inference time   |
+|-------------------|------------|--------------------------|--------------------------|-------------------------|---------------|-----------------------|
+| 2D Improved U-Net | 2,055,186  | 7.84                     | 1.67                     | 2.15                    | ~20 mins      | 40 ms / batch (of 42) |
+| 3D Improved U-Net | 5,944,914  | 22.68                    | 16.14                    | 22.82                   | ~76 mins      | 140 ms  / volume      |
+
+For both the 2D and 3D architecture, we used four encoders and decoders, each with two `size=3`convolution blocks and a
+`size=1` shortcut. Combine this with the same in/out channels for each resolution layer, the only variable becomes the 
+dimensionality of the model.
 
 ### 8.5 Failure Case Autopsy (3–5 cases)
 
+(prostate base and apex slices, small disconnected
+artifacts). Advise your manager which anatomical cases remain unsuitable for automated drafting.
 For each case, include the multi-panel figure (image, ground truth, prediction, FP/FN overlay).
 
 #### Case 1: <e.g. prostate apex slice, Patient X>
