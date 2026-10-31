@@ -110,6 +110,7 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
 
         diff_in_masks = test_masks[sample_no] - predictions[sample_no]
 
+        # For plotting the gnd vs preds + fp & fn
         for label_idx in range(len(LABELS)):
             test_mask_pixels = test_masks[sample_no][label_idx].cpu()
             reproduced_mask_pixels = predictions[sample_no][label_idx].cpu()
@@ -136,6 +137,7 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
         out_path = output_dir / f"rand_recon_sample_batch_{bidx + 1}.png"
         fig_main.savefig(out_path)
 
+        # For plotting the wrong predictions of the whole scan
         diff_in_masks_cum = torch.sum(torch.abs(diff_in_masks), dim=0)
         cum_rows, cum_cols = int(bidx // fig_cum_cols), bidx % fig_cum_cols
         cum_sub_title = f"Cum Diff Batch {bidx + 1}"
@@ -147,7 +149,7 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
         axes_cum_diff[cum_rows, cum_cols].axis("off")
         axes_cum_diff[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
 
-        # Cumulative mask
+        # For plotting the predicted segmentation
         cum_mask = torch.zeros_like(predictions[sample_no][0]).to(device)
         for class_idx in range(predictions[sample_no].shape[0]):
             class_mask = predictions[sample_no][class_idx]
@@ -190,14 +192,51 @@ def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     batch_size = 1  # We use batch size of 1 for testing 3D volumes
 
     for volume_no, (predicted, ground_truth) in enumerate(results):
-        diff_in_masks = ground_truth - predicted
-        fp = (diff_in_masks == -1).to(torch.int8)
-        fn = (diff_in_masks == 1).to(torch.int8)
+        # Make both masks [K, D, H, W]
+        predicted = torch.squeeze(predicted, dim=0).cpu().numpy()
+        ground_truth = torch.squeeze(ground_truth, dim=0).cpu().numpy()
 
+        diff_in_masks = ground_truth - predicted
+        fp = (diff_in_masks == -1).astype(int)      # False Positives
+        fn = (diff_in_masks == 1).astype(int)       # False Negatives
+        K, D, H, W = ground_truth.shape
 
         # 3D scatter plot?
+        fig = plt.figure(figsize=(1980, 500, "px"))
+        for channel in range(K):
+            ax = fig.add_subplot(1, K, channel + 1, projection='3d')
+            # Extract coordinates where false positives occur
+            z_fp, y_fp, x_fp = np.where(fp[channel] == 1)
+            if len(x_fp) > 0:
+                ax.scatter(x_fp, y_fp, z_fp, label=f'FP Ch {channel}', alpha=0.6, s=1)
 
-        pass
+            # Extract coordinates where false negatives occur
+            z_fn, y_fn, x_fn = np.where(fn[channel] == 1)
+            if len(x_fn) > 0:
+                ax.scatter(x_fn, y_fn, z_fn, label=f'FN Ch {channel}', alpha=0.6, s=1)
+
+            ax.set_zlabel('Width (W)')
+            ax.set_ylabel('Height (H)')
+            ax.set_xlabel('Depth (D)')
+            ax.set_title(f"Prediction error for {LABELS[channel]}", fontsize=9)
+            ax.legend()
+        fig.subplots_adjust(wspace=1.0, hspace=1.0)
+        fig.tight_layout()
+        plt.suptitle(f"3D Inference Error Plot - Volume {volume_no + 1}", fontsize=11)
+        plt.savefig(output_dir / f"volume_{volume_no + 1}_scatter.png", dpi=100)
+        # plt.show()
+        plt.close()
+
+        # Sliding w.r.t depth
+        # Essentially a gif of a 2D slice at each depth.
+        sliding_plot(predicted, ground_truth)
+
+def sliding_plot(predicted: np.ndarray, ground_truth: np.ndarray):
+    """
+    Takes a 3D predicted and ground truth mask of shape [K, D, H, W] and creates a gif of the 2D segmentation as it
+    slides along a chosen dimension.
+    """
+    pass
 
 
 # ======================================================================================================================
