@@ -10,8 +10,8 @@ from torch.utils.data import DataLoader, dataset
 from torchvision import transforms
 from tqdm import tqdm
 from collections import Counter
-from utils import SEED
 
+SEED = 67
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 random.seed(SEED)

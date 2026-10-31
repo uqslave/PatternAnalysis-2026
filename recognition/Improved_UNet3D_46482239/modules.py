@@ -1,6 +1,6 @@
 import torch
 from torch import nn, Tensor
-from utils import SEED
+from dataset import SEED
 
 torch.manual_seed(SEED)
 torch.cuda.manual_seed(SEED)

@@ -1,17 +1,14 @@
 import argparse
-import os
 import numpy as np
 import torch
 import random
 import time
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 from pathlib import Path
 
-from dataset import LABELS, get_dataloader_2d, get_dataloader_3d
+from dataset import SEED, LABELS, get_dataloader_2d, get_dataloader_3d
 from modules import dsc_per_class, DiceCELoss, ImprovedUnet, ImprovedUnet3D
 from predict import metrics_to_string, compute_metrics
-from utils import SEED
+from utils import VRAMTracker, plot_training, write_report
 
 # Set random seeds for reproducibility
 torch.manual_seed(SEED)
@@ -54,17 +51,17 @@ def train_model(
     validation_losses = list()
     training_scores = list()
     validation_scores = list()
-    unet_report_path = model_dir / rf"unet_report_{model_type}.txt"
     predictions_all, targets_all = list(), list()
-    peak_vram_allocated = peak_vram_reserved = 0
 
-    unet_report_train_temp = str()
-    unet_report_validation_temp = str()
+    train_report = str()
+    validate_report = str()
+    vram_tracker = VRAMTracker()
 
     print("Training...")
     start_time = time.time()
     training_times = list()
     training_subtime_cum = start_time
+
     for epoch in range(num_epochs):
         training_subtime = time.time()
         epoch_loss = validation_loss = 0
@@ -88,12 +85,8 @@ def train_model(
             scaler.step(optimiser)
             scaler.update()
             optimiser.zero_grad()
-            peak_allocated = torch.cuda.max_memory_allocated() / (1024 ** 2)    # In MB
-            peak_reserved = torch.cuda.max_memory_reserved() / (1024 ** 2)      # In MB
-            if peak_allocated > peak_vram_allocated:
-                peak_vram_allocated = peak_allocated
-            if peak_reserved > peak_vram_reserved:
-                peak_vram_reserved = peak_reserved
+
+            vram_tracker.update()
 
             losses_per_batch = torch.cat(
                 [
@@ -103,11 +96,11 @@ def train_model(
             )
             epoch_loss = epoch_loss + loss.item()
 
-        unet_report_train_temp = unet_report_train_temp + f"Mean DSC per class at epoch {epoch + 1}/{num_epochs}\n"
+        train_report = train_report + f"Mean DSC per class at epoch {epoch + 1}/{num_epochs}\n"
         losses_per_batch = torch.mean(losses_per_batch, dim=0)
         for label_idx, label in enumerate(LABELS):
-            unet_report_train_temp = unet_report_train_temp + f"{label}: {losses_per_batch[label_idx]:.3f}\n"
-        unet_report_train_temp = unet_report_train_temp + f"\n"
+            train_report = train_report + f"{label}: {losses_per_batch[label_idx]:.3f}\n"
+        train_report = train_report + f"\n"
 
         avg_loss = epoch_loss / len(train_dataloader)
         training_losses.append(avg_loss)
@@ -140,13 +133,12 @@ def train_model(
                 predictions_all.append(outputs.argmax(1).to(torch.uint8).cpu())
                 targets_all.append(val_masks.argmax(1).to(torch.uint8).cpu())
 
-            unet_report_validation_temp = unet_report_validation_temp + (f"Mean DSC per class for validation set at "
+            validate_report = validate_report + (f"Mean DSC per class for validation set at "
                                                                          f"epoch {epoch + 1}/{num_epochs}\n")
             losses_per_batch_temp = torch.mean(losses_per_batch_temp, dim=0)
             for label_idx, label in enumerate(LABELS):
-                unet_report_validation_temp = unet_report_validation_temp + (f"{label}: "
-                                                                             f"{losses_per_batch_temp[label_idx]:.3f}\n")
-            unet_report_validation_temp = unet_report_validation_temp + f"\n"
+                validate_report = validate_report + f"{label}: {losses_per_batch_temp[label_idx]:.3f}\n"
+            validate_report = validate_report + f"\n"
 
         scheduler.step()
         avg_validation_loss = validation_loss / len(validate_dataloader)
@@ -160,10 +152,17 @@ def train_model(
         del outputs, loss
         torch.cuda.empty_cache()
 
-    unet_report_metrics = ((f"Average time per epoch: {np.mean(training_times):.3f}s\n"
-                           + f"Peak VRAM allocated: {peak_vram_allocated} MB\n")
-                           + f"Peak VRAM reserved: {peak_vram_reserved} MB\n")
-    print(unet_report_metrics)
+    max_peak_allocated, max_peak_reserved, mean_peak_allocated, mean_peak_reserved = vram_tracker.evaluate()
+    resource_report = (
+            f"Average time per epoch: {np.mean(training_times):.3f}s\n"
+            f"Max peak VRAM allocated: {max_peak_allocated}:.3f MB\n" 
+            f"Max peak VRAM reserved: {max_peak_reserved} MB\n" 
+            f"Mean peak VRAM allocated: {mean_peak_allocated} MB\n"
+            f"Mean peak VRAM reserved: {mean_peak_reserved} MB\n"
+    )
+    print(resource_report)
+
+
     # ==================================================================================================================
     # =                                          Save model & Training Plots                                           =
     # ==================================================================================================================
@@ -172,52 +171,26 @@ def train_model(
     print(f"Saved checkpoint to {outpath}")
     print("")
 
-    # Plot training loss vs validation loss
-    fig, ax1 = plt.subplots(figsize=(700, 700, "px"))
-    ax1.plot(training_losses, color='tab:red', label='Training Loss')
-    ax1.plot(validation_losses, color='tab:orange', label='Validation Loss')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss', color='tab:red')
-    ax1.tick_params(axis='y', labelcolor='tab:red')
-
-    ax2 = ax1.twinx()
-    ax2.plot(training_scores, color='tab:blue', label='Training DSC Score')
-    ax2.plot(validation_scores, color='tab:green', label='Validation DSC Score')
-    ax2.set_ylabel('DSC Score', color='tab:blue')
-    ax2.tick_params(axis='y', labelcolor='tab:blue')
-    fig.legend(loc="lower left")
-
-    plt.title("U-Net Segmentation Training Curve")
-    fig.tight_layout()
     outpath = model_dir / fr"{model_type} UNET Segmentation Training Curve.png"
-    fig.savefig(outpath)
-    plt.show()
+    plot_training(outpath, training_losses, validation_losses, training_scores, validation_scores)
 
-    table = metrics_to_string(compute_metrics(torch.cat(predictions_all), torch.cat(targets_all)))
+    metrics = compute_metrics(torch.cat(predictions_all), torch.cat(targets_all))
+    table = metrics_to_string(metrics)
 
     # Write to file
-    unet_report_str = str()
-    divider_length = 100
-
     # 1. Training set per epoch
     # 2. Validation set per epoch
     # 3. Testing set per batch and mean across set
+    unet_report_path = model_dir / rf"unet_report_{model_type}.txt"
+    report_metrics = (
+        train_report,
+        validate_report,
+        table,
+        resource_report,
+    )
+    write_report(unet_report_path, report_metrics)
 
-    unet_report_str = unet_report_str + unet_report_train_temp
-    unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
 
-    unet_report_str = unet_report_str + unet_report_validation_temp
-    unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
-
-    unet_report_str = unet_report_str + table
-    unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
-
-    unet_report_str = unet_report_str + unet_report_metrics
-    unet_report_str = unet_report_str + "=" * divider_length + "\n\n"
-
-    unet_report_file = open(unet_report_path, "w")
-    unet_report_file.write(unet_report_str)
-    unet_report_file.close()
 
 # ======================================================================================================================
 # =                                                     Main Guard                                                     =
