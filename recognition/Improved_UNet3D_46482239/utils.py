@@ -1,7 +1,7 @@
 import math
 import random
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
+from tqdm import tqdm
 
 import dataset
 import glob
@@ -9,12 +9,14 @@ import os
 import torch
 import pandas as pd
 import matplotlib as mpl
+import matplotlib.animation as animation
 from torch import Tensor
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib import pyplot as plt
 from pathlib import Path
 
 from dataset import SEED, LABELS
-
+from modules import dsc_per_class
 
 torch.manual_seed(SEED)
 random.seed(SEED)
@@ -24,7 +26,7 @@ np.random.seed(SEED)
 # ======================================================================================================================
 # =                                                 Reporting Helpers                                                  =
 # ======================================================================================================================
-def write_report(out_path: Path, metrics: tuple):
+def write_report(out_path: Path, metrics: tuple) -> None:
     """
     Write report to a txt file
     :param out_path: Path/dir to save the .txt report
@@ -46,7 +48,7 @@ def write_report(out_path: Path, metrics: tuple):
 # ======================================================================================================================
 # =                                                  Plotting Helpers                                                  =
 # ======================================================================================================================
-def plot_training(out_path: Path, t_loss: list[float], v_loss: list[float], t_score: list[float], v_score: list[float]):
+def plot_training(out_path: Path, t_loss: list[float], v_loss: list[float], t_score: list[float], v_score: list[float]) -> None:
     """
     Plot training loss vs validation loss and training dice scores vs validation dice scores.
     :param out_path: Path/dir to save the plot
@@ -79,7 +81,7 @@ def plot_training(out_path: Path, t_loss: list[float], v_loss: list[float], t_sc
     plt.show()
 
 
-def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device, loader_len: int, batch_size: int):
+def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device, loader_len: int, batch_size: int) -> None:
     """
     Visualisation of the inference results for the 2D Improved U-Net segmentation model.
     Incl:
@@ -178,7 +180,7 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     plt.close()
 
 
-def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device, loader_len: int):
+def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device) -> None:
     """
     Visualisation of the inference results for the 3D Improved U-Net segmentation model.
     Incl:
@@ -191,6 +193,10 @@ def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     output_dir.mkdir(parents=True, exist_ok=True)
     batch_size = 1  # We use batch size of 1 for testing 3D volumes
 
+    p_sup_gt, p_sup_pd = torch.Tensor().to(device), torch.Tensor().to(device)
+    p_m_gt, p_m_pd = torch.Tensor().to(device), torch.Tensor().to(device)
+    p_inf_gt, p_inf_pd = torch.Tensor().to(device), torch.Tensor().to(device)
+
     for volume_no, (predicted, ground_truth) in enumerate(results):
         # Make both masks [K, D, H, W]
         predicted = torch.squeeze(predicted, dim=0).cpu().numpy()
@@ -202,41 +208,226 @@ def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
         K, D, H, W = ground_truth.shape
 
         # 3D scatter plot?
-        fig = plt.figure(figsize=(1980, 500, "px"))
-        for channel in range(K):
-            ax = fig.add_subplot(1, K, channel + 1, projection='3d')
-            # Extract coordinates where false positives occur
-            z_fp, y_fp, x_fp = np.where(fp[channel] == 1)
-            if len(x_fp) > 0:
-                ax.scatter(x_fp, y_fp, z_fp, label=f'FP Ch {channel}', alpha=0.6, s=1)
-
-            # Extract coordinates where false negatives occur
-            z_fn, y_fn, x_fn = np.where(fn[channel] == 1)
-            if len(x_fn) > 0:
-                ax.scatter(x_fn, y_fn, z_fn, label=f'FN Ch {channel}', alpha=0.6, s=1)
-
-            ax.set_zlabel('Width (W)')
-            ax.set_ylabel('Height (H)')
-            ax.set_xlabel('Depth (D)')
-            ax.set_title(f"Prediction error for {LABELS[channel]}", fontsize=9)
-            ax.legend()
-        fig.subplots_adjust(wspace=1.0, hspace=1.0)
-        fig.tight_layout()
-        plt.suptitle(f"3D Inference Error Plot - Volume {volume_no + 1}", fontsize=11)
-        plt.savefig(output_dir / f"volume_{volume_no + 1}_scatter.png", dpi=100)
-        # plt.show()
-        plt.close()
+        scatter_3d(output_dir, fp, fn, K, volume_no)
 
         # Sliding w.r.t depth
         # Essentially a gif of a 2D slice at each depth.
-        sliding_plot(predicted, ground_truth)
+        # Also pool together superior, middle, and inferior slices for precessing later.
+        superior_gt, superior_pd, middle_gt, middle_pd, inferior_gt, inferior_pd = sliding_plot(output_dir, device, volume_no, predicted, ground_truth)
+        # All returned should be of shape [1, K, H, D]
+        torch.cat([p_sup_gt, superior_gt],    dim = 0)
+        torch.cat([p_sup_pd, superior_pd],    dim = 0)
+        torch.cat([p_m_gt, middle_gt],        dim = 0)
+        torch.cat([p_m_pd, middle_pd],        dim = 0)
+        torch.cat([p_inf_gt, inferior_gt],    dim = 0)
+        torch.cat([p_inf_pd, inferior_pd],    dim = 0)
 
-def sliding_plot(predicted: np.ndarray, ground_truth: np.ndarray):
+    p_sup = (p_sup_gt, p_sup_pd)
+    p_m = (p_m_gt, p_m_pd)
+    p_inf = (p_inf_gt, p_inf_pd)
+    plot_prostate(p_sup, p_m, p_inf)
+
+
+def scatter_3d(output_dir: Path, fp: np.ndarray, fn: np.ndarray, K: int, volume_no: int) -> None:
     """
-    Takes a 3D predicted and ground truth mask of shape [K, D, H, W] and creates a gif of the 2D segmentation as it
+    Helper method to plot the 3D scatter plot to visualise each mask
+    :param output_dir:
+    :param fp: False positive in predicted masks
+    :param fn: False negative in predicted masks
+    :param K: Number of classes
+    :param volume_no: Which volume this instance is out of the entire test set.
+    """
+
+    fig = plt.figure(figsize=(1980, 500, "px"))
+    for channel in range(K):
+        ax = fig.add_subplot(1, K, channel + 1, projection='3d')
+        # Extract coordinates where false positives occur
+        z_fp, y_fp, x_fp = np.where(fp[channel] == 1)
+        if len(x_fp) > 0:
+            ax.scatter(x_fp, y_fp, z_fp, label=f'FP Ch {channel}', alpha=0.6, s=1)
+
+        # Extract coordinates where false negatives occur
+        z_fn, y_fn, x_fn = np.where(fn[channel] == 1)
+        if len(x_fn) > 0:
+            ax.scatter(x_fn, y_fn, z_fn, label=f'FN Ch {channel}', alpha=0.6, s=1)
+
+        ax.set_xlabel("Width (W)", fontsize=7)
+        ax.set_ylabel("Height (H)", fontsize=7)
+        ax.set_zlabel("Depth (D)", fontsize=7)
+        ax.set_title(f"Prediction error for {LABELS[channel]}", fontsize=8)
+        ax.legend()
+
+    fig.subplots_adjust(wspace=1.0, hspace=1.0)
+    fig.tight_layout()
+    plt.suptitle(f"3D Inference Error Plot - Volume {volume_no + 1}", fontsize=11)
+    plt.savefig(output_dir / f"volume_{volume_no + 1}_scatter.png", dpi=100)
+    # plt.show()
+    plt.close()
+
+
+def sliding_plot(output_dir: Path, device: torch.device, v_no: int, predicted: np.ndarray, ground_truth: np.ndarray) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """
+    Takes a 3D predicted and ground truth mask of shape [K, D, H, W] and creates a .gif of the two 2D segmentation as it
     slides along a chosen dimension.
+    https://matplotlib.org/stable/gallery/animation/dynamic_image.html
+    :param output_dir: Path to the output directory
+    :param device: CUDA or CPU
+    :param v_no: Volume number
+    :param predicted: Predicted mask
+    :param ground_truth: Ground truth mask
+    :return: The selected superior, middle, and inferior scans for this volume.
     """
-    pass
+    predicted = torch.from_numpy(predicted).to(device)
+    ground_truth = torch.from_numpy(ground_truth).to(device)
+
+    # Superior to inferior end.
+    dims = (3, 0, 2, 1) # shape = [W, K, H, D]
+    predicted = torch.permute(predicted, dims)
+    ground_truth = torch.permute(ground_truth, dims)
+    # Can treat it as 2D scans with batch size of D|H|W.
+
+    dsc_scores = dsc_per_class(predicted, ground_truth).cpu() # [W, K] per slice
+    W, K = dsc_scores.shape
+
+    channel = 5 # Prostate label no.
+    prostate_slices = list()    # Indices where prostate is present in GT
+
+    fig_gifs, ax_gifs = plt.subplots(1, 3)  # 1 row of 3 gifs, showing the GT, predictions, and diff
+    imgs_gif = list()
+    cmap_whole = plt.get_cmap("grey")
+    cmap_delta = plt.get_cmap("PuOr")
+    LinearSegmentedColormap.from_list(f"", cmap_delta([0.15, 0.5, 0.85])).resampled(3)
+    print(f"Rendering frames for Volume {v_no + 1} gif...")
+
+    gnd_truth = ground_truth.argmax(1).to(torch.uint8)  # Should give [W, H, D]
+    prdctd = predicted.argmax(1).to(torch.uint8)        # Should give [W, H, D]
+    delta = -1 * (gnd_truth - prdctd)                   # Result includes fp and fn
+    for layer in range(W):
+        if ground_truth[layer][channel].sum() > 0:
+            # This slice actually contains the prostate!
+            prostate_slices.append(layer)
+
+        # Create frame (image)
+        gt = gnd_truth[layer].cpu().numpy()     # Should give [H, D]
+        pd = prdctd[layer].cpu().numpy()        # Should give [H, D]
+        dm = delta[layer].cpu().numpy()         # Should give [H, D]
+
+        img_gt = ax_gifs[0].imshow(gt, cmap = cmap_whole, animated=True)
+        img_pd = ax_gifs[1].imshow(pd, cmap = cmap_whole, animated=True)
+        img_dm = ax_gifs[2].imshow(dm, cmap = cmap_delta, animated=True)
+        if layer == 0:
+            img_gt = ax_gifs[0].imshow(gt, cmap = cmap_whole, animated=True)
+            img_pd = ax_gifs[1].imshow(pd, cmap = cmap_whole, animated=True)
+            img_dm = ax_gifs[2].imshow(dm, cmap = cmap_delta, animated=True)
+        imgs_gif.append((img_gt, img_pd, img_dm),)
+
+    for ax in ax_gifs:
+        ax.axis("off")
+
+    ax_gifs[0].set_title("Ground Truth", fontsize=12)
+    ax_gifs[1].set_title("Predicted", fontsize=12)
+    ax_gifs[2].set_title("Errors", fontsize=12)
+
+    gif_duration = 12000 # ms
+    intvl = int(gif_duration / W)
+    fps = int(1000 / intvl)
+    anim_gif = animation.ArtistAnimation(fig_gifs, imgs_gif, interval=intvl, repeat_delay=500, repeat=True)
+
+    # plt.show()
+    gif_writer = animation.PillowWriter(fps = fps, metadata=dict(artist='Me'), bitrate=1800)
+    anim_gif.save(output_dir / f"masks_{v_no + 1}.gif",writer=gif_writer)
+    plt.close()
+
+    # Now filter prostate slices
+    # Extract slices
+    gt = torch.index_select(ground_truth, dim = 0, index = torch.tensor(prostate_slices).to(device))   # [N, K, H, D]
+    pd = torch.index_select(predicted, dim = 0, index = torch.tensor(prostate_slices).to(device))      # [N, K, H, D]
+
+    s_gt_1, i_gt_1 = gt[0], gt[-1]              # [K, H, D]
+    s_pd_1, i_pd_1 = pd[0], pd[-1]              # [K, H, D]
+
+    mid_index = len(prostate_slices) // 2
+    m_gt, m_pd = gt[mid_index], pd[mid_index]   # [K, H, D]
+
+    superior_gt = torch.Tensor(s_gt_1).unsqueeze(dim=0).to(device)
+    superior_pd = torch.Tensor(s_pd_1).unsqueeze(dim=0).to(device)
+    middle_gt = torch.Tensor(m_gt).unsqueeze(dim=0).to(device)
+    middle_pd = torch.Tensor(m_pd).unsqueeze(dim=0).to(device)
+    inferior_gt = torch.Tensor(i_gt_1).unsqueeze(dim=0).to(device)
+    inferior_pd = torch.Tensor(i_pd_1).unsqueeze(dim=0).to(device)
+
+    return superior_gt, superior_pd, middle_gt, middle_pd, inferior_gt, inferior_pd
+
+
+def plot_prostate(sup: tuple[Tensor, Tensor], mid: tuple[Tensor, Tensor], inf: tuple[Tensor, Tensor]) -> None:
+    """
+    Plots a subset of the slices where the prostate is present.
+    1 at superior, 1 at inferior, 1 in the middle. For all three, we show the GT, PD, and Error (FP & FN).
+    3 positions, each with 3 plots.
+    Bladder and prostate are in contact when going through the slices top-down.
+    Inputs should be tuples with 2 tensors each of [B, K, H, D]
+    :param sup: Superior slices where the prostate is present; pooled together across the whole set
+    :param mid: Middle slices where the prostate is present; pooled together across the whole set
+    :param inf: Inferior slices where the prostate is present; pooled together across the whole set
+    """
+    channel = 5
+
+    sup_gt, sup_pd = sup    # Both tensors should be [B, K, H, D]
+    mid_gt, mid_pd = mid    # Both tensors should be [B, K, H, D]
+    inf_gt, inf_pd = inf    # Both tensors should be [B, K, H, D]
+
+    sup_dsc = dsc_per_class(sup_pd, sup_gt) # [B, K]
+    mid_dsc = dsc_per_class(mid_pd, mid_gt) # [B, K]
+    inf_dsc = dsc_per_class(inf_pd, inf_gt) # [B, K]
+
+    sup_worst = torch.argmin(sup_dsc, dim = 0)[channel]  # [K]
+    mid_worst = torch.argmin(mid_dsc, dim = 0)[channel]  # [K]
+    inf_worst = torch.argmin(inf_dsc, dim = 0)[channel]  # [K]
+
+    superior_pd = sup_pd[sup_worst]
+    superior_gt = sup_gt[sup_worst]
+    middle_pd = mid_pd[mid_worst]
+    middle_gt = mid_gt[mid_worst]
+    inferior_pd = inf_pd[inf_worst]
+    inferior_gt = inf_gt[inf_worst]
+
+    superior_delta = -1 * (superior_gt - superior_pd)
+    middle_delta = -1 * (middle_gt - middle_pd)
+    inferior_delta = -1 * (inferior_gt - inferior_pd)
+
+    fig_rows = 3    # GT, PD, Error
+    fig_cols = 3    # As per the docstring
+    fig, axes = plt.subplots(fig_rows, fig_cols)
+    cmap_whole = plt.get_cmap("Greys_r")
+    cmap_delta = plt.get_cmap("Spectral_r")
+
+    plot_data = (
+        (superior_gt, superior_pd, superior_delta),
+        (middle_gt, middle_pd, middle_delta),
+        (inferior_gt, inferior_pd, inferior_delta),
+    )
+    for row, scan_positon in enumerate(plot_data):
+        for col, scan in enumerate(scan_positon):
+            img_data = scan[channel].cpu().numpy()
+            cmap = cmap_whole if row < len(plot_data) - 1 else cmap_delta
+            img = axes[row, col].imshow(img_data, cmap=cmap, vmin=-1.0, vmax=1.0, interpolation="nearest")
+            axes[row, col].axis("off")
+            if row == len(plot_data) - 1:
+                fig.colorbar(img, orientation="vertical", ticks = [-1, 0, 1])
+    fig.supylabel(
+        'Inferior        |        Middle        |        Superior',
+        ha='left',
+        va='center',
+        fontsize=18
+    )
+
+    dice_output = (
+        f"Superior worst DSC:\t{sup_dsc[sup_worst][channel]}\n"
+        f"Middle worst DSC:\t{mid_dsc[mid_worst][channel]}\n"
+        f"Inferior worst DSC:\t{inf_dsc[inf_worst][channel]}\n"
+    ),
+    out_path = Path(r"trained_model/prostate_dice.txt")
+    write_report(out_path, dice_output)
 
 
 # ======================================================================================================================
