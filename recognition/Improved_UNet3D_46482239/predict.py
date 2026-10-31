@@ -10,7 +10,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from dataset import SEED, LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D, verify_splits
 from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class, fnr_per_class, pr_per_class
-from utils import write_report, plot_2d_inference
+from utils import write_report, plot_2d_inference, plot_3d_inference
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
@@ -47,23 +47,23 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
     :param K: Number of classes
     :return: Evaluation metrics
     """
-    pred_onehot, targ_onehot = _one_hot(predictions, K), _one_hot(targets, K)
-    present = targ_onehot.flatten(2).sum(2) > 0     # [N, K] class exists in the ground truth
 
-    dsc = dsc_per_class(pred_onehot, targ_onehot)   # [N, K] per slice
+    present = targets.flatten(2).sum(2) > 0     # [N, K] class exists in the ground truth
+
+    dsc = dsc_per_class(predictions, targets)   # [N, K] per slice
     dsc_wempty = dsc.mean(0)
     dsc_present = (dsc * present).sum(0) / present.sum(0).clamp(min=1)
 
     # Change [N, K, dims] to [K, N, dims]
     # Unsqueeze to make it [1, K, N, dims]. Now can be treated as a tensor with batch size of 1.
-    pred_onehot = pred_onehot.movedim(0, 1).unsqueeze(0)
-    targ_onehot = targ_onehot.movedim(0, 1).unsqueeze(0)
+    predictions = predictions.movedim(0, 1).unsqueeze(0)
+    targets = targets.movedim(0, 1).unsqueeze(0)
 
-    dsc_pooled = dsc_per_class(pred_onehot, targ_onehot)[0]
-    iou_pooled = iou_per_class(pred_onehot, targ_onehot)[0]
-    pixel_fpr = fpr_per_class(pred_onehot, targ_onehot)[0]
-    pixel_fnr = fnr_per_class(pred_onehot, targ_onehot)[0]
-    pixel_pr, pixel_re = pr_per_class(pred_onehot, targ_onehot)
+    dsc_pooled = dsc_per_class(predictions, targets)[0]
+    iou_pooled = iou_per_class(predictions, targets)[0]
+    pixel_fpr = fpr_per_class(predictions, targets)[0]
+    pixel_fnr = fnr_per_class(predictions, targets)[0]
+    pixel_pr, pixel_re = pr_per_class(predictions, targets)
 
     return {
         "n_present"         : present.sum(0),
@@ -136,10 +136,12 @@ def run_inference2d(model: ImprovedUnet, loader: DataLoader, device: torch.devic
         end_time = time.time()
         inference_times.append(end_time - start_time)
 
+        predictions, test_masks = predictions.argmax(1).to(torch.uint8), test_masks.argmax(1).to(torch.uint8)
+        predictions, test_masks = _one_hot(predictions, len(LABELS)), _one_hot(test_masks, len(LABELS))
         results.append((test_masks, predictions))
 
-        predictions_all.append(predictions.argmax(1).to(torch.uint8).cpu())
-        targets_all.append(test_masks.argmax(1).to(torch.uint8).cpu())
+        predictions_all.append(predictions)
+        targets_all.append(test_masks)
 
     plot_2d_inference(results, device, len(loader), batch_size)
     metrics = compute_metrics(torch.cat(predictions_all), torch.cat(targets_all))
@@ -164,6 +166,7 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
     """
     predictions_all, targets_all = list(), list()
     inference_times = list()
+    results = []
 
     print("Running inference...")
     model.eval()
@@ -175,9 +178,14 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
         end_time = time.time()
         inference_times.append(end_time - start_time)
 
-        predictions_all.append(predictions.argmax(1).to(torch.uint8).cpu())
-        targets_all.append(target.argmax(1).to(torch.uint8).cpu())
+        predictions, target = predictions.argmax(1).to(torch.uint8), target.argmax(1).to(torch.uint8)
+        predictions, target = _one_hot(predictions, len(LABELS)), _one_hot(target, len(LABELS))
+        results.append((target, predictions))
 
+        predictions_all.append(predictions)
+        targets_all.append(target)
+
+    plot_3d_inference(results, device, len(loader), batch_size)
     metrics = compute_metrics(torch.cat(predictions_all), torch.cat(targets_all))
     table = metrics_to_string(metrics)
     print(table)
@@ -217,7 +225,7 @@ def main(argsv):
         raise Exception("Unknown model")
 
     # Write to file
-    out_path = Path("trained_model/inference_results.txt")
+    out_path = Path(f"trained_model/inference_results_{argsv.model}.txt")
     write_report(out_path, inference_result)
 
 

@@ -48,25 +48,25 @@ def plot_training(out_path: Path, t_loss: list[float], v_loss: list[float], t_sc
     """
     Plot training loss vs validation loss and training dice scores vs validation dice scores.
     :param out_path: Path/dir to save the plot
-    :param t_loss: Training losses
-    :param v_loss: Validation losses
-    :param t_score: Training dice scores
-    :param v_score: Validation dice scores
+    :param t_loss: Training DSC+CE losses
+    :param v_loss: Validation DSC+CE losses
+    :param t_score: Training DSC+CE scores
+    :param v_score: Validation DSC+CE scores
     """
 
     # Plot training loss vs validation loss
     fig, ax1 = plt.subplots(figsize=(700, 700, "px"))
-    ax1.plot(t_loss, color='tab:red', label='Training Loss')
-    ax1.plot(v_loss, color='tab:orange', label='Validation Loss')
+    ax1.plot(t_loss, color='tab:red', label='Training DSC+CE Loss')
+    ax1.plot(v_loss, color='tab:orange', label='Validation DSC+CE Loss')
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Loss', color='tab:red')
     ax1.tick_params(axis='y', labelcolor='tab:red')
 
     # Plot training dice score vs validation dice score
     ax2 = ax1.twinx()
-    ax2.plot(t_score, color='tab:blue', label='Training DSC Score')
-    ax2.plot(v_score, color='tab:green', label='Validation DSC Score')
-    ax2.set_ylabel('DSC Score', color='tab:blue')
+    ax2.plot(t_score, color='tab:blue', label='Training DSC+CE Score')
+    ax2.plot(v_score, color='tab:green', label='Validation DSC+CE Score')
+    ax2.set_ylabel('DSC+CE Score', color='tab:blue')
     ax2.tick_params(axis='y', labelcolor='tab:blue')
     fig.legend(loc="lower left")
 
@@ -98,6 +98,9 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     fig_cum_diff, axes_cum_diff = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     four_colour_cmap = mpl.colormaps['jet'].resampled(len(LABELS))
 
+    err_cmap = plt.get_cmap("RdYlBu").resampled(3)
+    cum_cmap = plt.get_cmap("Reds").resampled(2)
+
     for bidx, (test_masks, predictions) in enumerate(results):
         fig_main, axes_main = plt.subplots(3, len(LABELS), figsize=(1440, 900, "px"))
         sample_no = random.randint(0, len(test_masks) - 1)
@@ -114,13 +117,13 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
             axes_main[0, label_idx].imshow(test_mask_pixels.squeeze(), cmap="grey")
             axes_main[0, label_idx].axis("off")
 
-            # UNET output mask
+            # Predicted mask
             axes_main[1, label_idx].imshow(reproduced_mask_pixels.squeeze(), cmap="grey")
             axes_main[1, label_idx].axis("off")
 
             # Difference in mask
-            im = axes_main[2, label_idx].imshow(diff_in_mask_pixels.squeeze(), cmap="seismic", vmin=-1.0, vmax=1.0)
-            fig_main.colorbar(im, orientation='vertical')
+            im = axes_main[2, label_idx].imshow(diff_in_mask_pixels.squeeze(), cmap=err_cmap, vmin=-1.0, vmax=1.0, interpolation="nearest")
+            fig_main.colorbar(im, orientation='vertical', ticks = [-1, 0, 1])
             axes_main[2, label_idx].axis("off")
             fig_main.supylabel('Difference        |        Reconstructed        |        Ground Truth', ha='left',
                                va='center', fontsize=18)
@@ -130,14 +133,14 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
         out_path = output_dir / f"rand_recon_sample_batch_{bidx + 1}.png"
         fig_main.savefig(out_path)
 
-        diff_in_masks_cum = torch.sum(diff_in_masks, dim=0)
+        diff_in_masks_cum = torch.sum(torch.abs(diff_in_masks), dim=0)
         cum_rows, cum_cols = int(bidx // fig_cum_cols), bidx % fig_cum_cols
         cum_sub_title = f"Cum Diff Batch {bidx + 1}"
 
         # Cumulative difference masks
-        im_cum_diff = axes_cum_diff[cum_rows, cum_cols].imshow(diff_in_masks_cum.cpu().squeeze(), cmap="seismic", vmin=-1.0,
-                                                               vmax=1.0)
-        fig_cum_diff.colorbar(im_cum_diff, orientation='vertical')
+        im_cum_diff = axes_cum_diff[cum_rows, cum_cols].imshow(diff_in_masks_cum.cpu().squeeze(), cmap=cum_cmap, vmin=0.0,
+                                                               vmax=1.0, interpolation="nearest")
+        fig_cum_diff.colorbar(im_cum_diff, orientation='vertical', ticks = [0, 1])
         axes_cum_diff[cum_rows, cum_cols].axis("off")
         axes_cum_diff[cum_rows, cum_cols].set_title(cum_sub_title, fontsize=12)
 
@@ -168,6 +171,23 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     fig_cum.savefig(out_path)
     plt.show()
     plt.close()
+
+
+def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device, loader_len: int):
+    """
+    Visualisation of the inference results for the 3D Improved U-Net segmentation model.
+    Incl:
+        predicted
+    :param results: Ground truth and predicted masks for each batch
+    :param device: CUDA or CPU
+    :param loader_len: length of the dataloader
+    """
+    output_dir = Path("images/")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    batch_size = 1  # We use batch size of 1 for testing 3D volumes
+
+    for volume_no, (predicted, ground_truth) in enumerate(results):
+        pass
 
 
 # ======================================================================================================================
