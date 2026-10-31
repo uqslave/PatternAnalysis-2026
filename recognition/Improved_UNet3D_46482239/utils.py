@@ -1,6 +1,8 @@
 import math
 import random
 import numpy as np
+from matplotlib.colors import LinearSegmentedColormap
+
 import dataset
 import glob
 import os
@@ -98,7 +100,8 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     fig_cum_diff, axes_cum_diff = plt.subplots(fig_cum_rows, fig_cum_cols, figsize=(1540, 1540, "px"))
     four_colour_cmap = mpl.colormaps['jet'].resampled(len(LABELS))
 
-    err_cmap = plt.get_cmap("RdYlBu").resampled(3)
+    err_cmap = plt.get_cmap("PuOr")
+    err_cmap = LinearSegmentedColormap.from_list(f"", err_cmap([0.15, 0.5, 0.85])).resampled(3)
     cum_cmap = plt.get_cmap("Reds").resampled(2)
 
     for bidx, (test_masks, predictions) in enumerate(results):
@@ -110,7 +113,7 @@ def plot_2d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
         for label_idx in range(len(LABELS)):
             test_mask_pixels = test_masks[sample_no][label_idx].cpu()
             reproduced_mask_pixels = predictions[sample_no][label_idx].cpu()
-            diff_in_mask_pixels = diff_in_masks[label_idx].cpu()
+            diff_in_mask_pixels = -1 * diff_in_masks[label_idx].cpu()
 
             axes_main[0, label_idx].set_title(LABELS[label_idx], fontsize=12)
             # Ground truth mask
@@ -187,6 +190,13 @@ def plot_3d_inference(results: list[tuple[Tensor, Tensor]], device: torch.device
     batch_size = 1  # We use batch size of 1 for testing 3D volumes
 
     for volume_no, (predicted, ground_truth) in enumerate(results):
+        diff_in_masks = ground_truth - predicted
+        fp = (diff_in_masks == -1).to(torch.int8)
+        fn = (diff_in_masks == 1).to(torch.int8)
+
+
+        # 3D scatter plot?
+
         pass
 
 
