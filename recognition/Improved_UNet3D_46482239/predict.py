@@ -8,8 +8,8 @@ import argparse
 
 from torch import Tensor
 from torch.utils.data import DataLoader
-from dataset import SEED, LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D
-from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class
+from dataset import SEED, LABELS, BATCH_SIZE_2D, get_dataloader_2d, get_dataloader_3d, BATCH_SIZE_3D, verify_splits
+from modules import dsc_per_class, ImprovedUnet, ImprovedUnet3D, iou_per_class, fpr_per_class, fnr_per_class, pr_per_class
 from utils import write_report, plot_2d_inference
 
 torch.manual_seed(SEED)
@@ -40,6 +40,7 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
         DSC (pooled),\n
         IoU (pooled),\n
         FPR (pooled),\n
+        FNR (pooled),\n
     Every value returned has shape [K].
     :param predictions: Predictions
     :param targets: Targets (Ground Truth)
@@ -61,6 +62,8 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
     dsc_pooled = dsc_per_class(pred_onehot, targ_onehot)[0]
     iou_pooled = iou_per_class(pred_onehot, targ_onehot)[0]
     pixel_fpr = fpr_per_class(pred_onehot, targ_onehot)[0]
+    pixel_fnr = fnr_per_class(pred_onehot, targ_onehot)[0]
+    pixel_pr, pixel_re = pr_per_class(pred_onehot, targ_onehot)
 
     return {
         "n_present"         : present.sum(0),
@@ -68,7 +71,10 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
         "dsc_present"       : dsc_present,
         "dsc_pooled"        : dsc_pooled,
         "iou_pooled"        : iou_pooled,
-        "pixel_fpr"         : pixel_fpr
+        "pixel_fpr"         : pixel_fpr,
+        "pixel_fnr"         : pixel_fnr,
+        "precision"         : pixel_pr[0],
+        "recall"            : pixel_re[0],
     }
 
 
@@ -81,6 +87,9 @@ def metrics_to_string(metrics: dict) -> str:
         f"{'Dice(pooled)':>14}"
         f"{'IoU(pooled)':>13}"
         f"{'pixelFPR':>10}"
+        f"{'pixelFNR':>10}"
+        f"{'precision':>10}"
+        f"{'recall':>10}"
     ]
     for k, name in enumerate(LABELS):
         lines.append(
@@ -91,6 +100,9 @@ def metrics_to_string(metrics: dict) -> str:
             f"{metrics['dsc_pooled'][k]:>14.3f}"
             f"{metrics['iou_pooled'][k]:>13.3f}"
             f"{metrics['pixel_fpr'][k]:>10.4f}"
+            f"{metrics['pixel_fnr'][k]:>10.4f}"
+            f"{metrics['precision'][k]:>10.4f}"
+            f"{metrics['recall'][k]:>10.4f}"
         )
     return "\n".join(lines) + "\n"
 
@@ -170,8 +182,8 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
     table = metrics_to_string(metrics)
     print(table)
 
-    inference_times_str = (f"Mean Inference Time: {np.mean(inference_times):.2f}s\n"
-                           f"Max Inference Time: {np.max(inference_times):.2f}s\n")
+    inference_times_str = (f"Mean Inference Time p/V: {np.mean(inference_times):.2f}s\n"
+                           f"Max Inference Time p/V: {np.max(inference_times):.2f}s\n")
 
     return table, inference_times_str
 
@@ -219,4 +231,6 @@ if __name__ == "__main__":
 
     output_dir = Path("images/")
     output_dir.mkdir(parents=True, exist_ok=True)
+    if not verify_splits(args.model):
+        raise Exception("Please retrain data with the new splits")
     main(args)

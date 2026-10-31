@@ -364,6 +364,45 @@ def fpr_per_class(predictions: Tensor, targets: Tensor):
 
 
 @torch.no_grad()
+def fnr_per_class(predictions: Tensor, targets: Tensor):
+    """
+    Used during inference.
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
+    :return: False negative rates (FNR) per class
+    """
+    B, K = predictions.shape[:2]
+    gtn = targets == 0.
+    fn = (predictions == 0).float() * (~gtn).float()
+    #fn = (torch.clamp((predictions > 0).float() - gtn.float(), 0.0))
+    p_count = (~gtn).float().reshape(B, K, -1).sum(dim=2)
+    fn_count = fn.reshape(B, K, -1).sum(dim=2)
+
+    return torch.div(fn_count, p_count)
+
+
+@torch.no_grad()
+def pr_per_class(predictions: Tensor, targets: Tensor, smooth: float = 1e-8):
+    """
+    Used during inference.
+    :param predictions: Argmax output from model [B, K, H, W] (values in {0, 1})
+    :param targets: Ground truth [B, K, H, W] (values in {0, 1})
+    :return: Precision and recall per class
+    """
+    B, K = predictions.shape[:2]
+    p = predictions.reshape(B, K, -1).bool()
+    t = targets.reshape(B, K, -1).bool()
+
+    tp = (p & t).sum(dim=2).float()
+    fp = (p & ~t).sum(dim=2).float()
+    fn = (~p & t).sum(dim=2).float()
+
+    precision = tp / (tp + fp + smooth)
+    recall = tp / (tp + fn + smooth)
+    return precision, recall
+
+
+@torch.no_grad()
 def _counts(predictions: Tensor, targets: Tensor):
     """
     Reshapes and sums predictions and targets, and calculates intersection.
