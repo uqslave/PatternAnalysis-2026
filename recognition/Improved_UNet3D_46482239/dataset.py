@@ -434,7 +434,7 @@ class HipMRI3DDataset(torch.utils.data.Dataset):
     Patient-level splits to prevent data leakage.
     """
     PATCH = (   # Each must be divisible by 4 because of the two pooling steps in the model
-        80,    # D
+        80,     # D
         152,    # H
         152,    # W
     )

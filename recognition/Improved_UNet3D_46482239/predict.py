@@ -33,7 +33,7 @@ def _one_hot(labels: Tensor, K: int) -> Tensor:
 @torch.no_grad()
 def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) -> dict[str, Tensor]:
     """
-    Label maps [N, H, W] (2D) or [N, D, H, W] (3D). Called after processing every batch.
+    Label maps [N, K, H, W] (2D) or [N, K, D, H, W] (3D). Called after processing every batch.
     Evaluates:
         DSC (+ empty),\n
         DSC (present),\n
@@ -48,7 +48,9 @@ def compute_metrics(predictions: Tensor, targets: Tensor, K: int = len(LABELS)) 
     :return: Evaluation metrics
     """
 
-    present = targets.flatten(2).sum(2) > 0     # [N, K] class exists in the ground truth
+    present = targets.flatten(2).sum(2) > 0     # Flattens to [N, K, dims] then sum to get tensor of shape [N, K]
+                                                # Like creating a mask to only filter out scores where the class of
+                                                # interest exists in the ground truth
 
     dsc = dsc_per_class(predictions, targets)   # [N, K] per slice
     dsc_wempty = dsc.mean(0)
@@ -185,7 +187,7 @@ def run_inference3d(model: ImprovedUnet3D, loader: DataLoader, device: torch.dev
         predictions_all.append(predictions)
         targets_all.append(target)
 
-    plot_3d_inference(results, device, len(loader))
+    plot_3d_inference(results, device)
     metrics = compute_metrics(torch.cat(predictions_all), torch.cat(targets_all))
     table = metrics_to_string(metrics)
     print(table)
